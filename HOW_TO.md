@@ -61,6 +61,8 @@ $ ./scripts/scenarios/scenario2.sh
   - `dry_run`: `False`
   - `recent_minutes`: enough window with predictions, labels, and complete snapshots
   - `min_samples`, `min_fail_samples`, `min_pass_samples`: lower them for a quick demo if needed
+- 완료 시, MLflow에 모델이 등록됩니다.
+![mlflow.png](docs/images/mlflow.png)
 
 ### 6. Evaluate candidate gate
 - Airflow UI에서 `evaluate_candidate_serving_snapshot_gate` DAG를 실행합니다.
@@ -68,6 +70,9 @@ $ ./scripts/scenarios/scenario2.sh
   - `dry_run`: `False`
   - `candidate_version`: empty이면 MLflow `candidate` alias를 사용합니다.
 - 만약 `candidate`가 serving snapshot 평가 기준 현재 `champion`보다 성능이 좋지 않다면, DAG는 성공하지만 배포 준비는 `failed`로 끝이 납니다.
+- 정상적으로 종료될 경우, eval_status는 `passed`가 됩니다.
+![passed.png](docs/images/passed.png)
+
 
 ### 7. Record deployment request
 - Gate가 통과한 뒤 `record_serving_candidate_deployment_request` DAG를 실행합니다.
@@ -89,6 +94,9 @@ $ uv run python scripts/utility/inspect_deployment_requests.py
   approval_status=approved
   rollout_status=not_started
 ```
+- Airflow UI 실행 결과는 다음과 같습니다. 이곳에서 request id `915a7016-ae32-4ee7-ae08-9a7e1becbe7d`를 얻습니다. 이후에 사용하는 값입니다.
+![airflow.png](docs/images/airflow.png)
+
 
 ### 9. Deploy candidate to canary
 - Airflow UI에서 `deploy_candidate_to_canary` DAG를 실행합니다.
