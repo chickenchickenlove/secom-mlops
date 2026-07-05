@@ -43,7 +43,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 실행 방법은 [HOW_TO.md](./HOW_TO.md)를 참고하세요.
 
 ## Online Serving Path
-![img_5.png](img_5.png)
+![online-serving-path](docs/images/online-serving-path.png)
 
 Feature online path는 Kafka event를 기준으로 구성됩니다.
 
