@@ -1,0 +1,36 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'org.example'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+application {
+    mainClass = 'org.example.FeatureAssemblerApp'
+    applicationDefaultJvmArgs = ['-Djava.net.preferIPv4Stack=true']
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+dependencies {
+    implementation 'org.apache.kafka:kafka-streams:4.3.1'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+    implementation 'org.slf4j:slf4j-api:2.0.13'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.13'
+    
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.apache.kafka:kafka-streams-test-utils:4.3.1'
+}
+
+test {
+    useJUnitPlatform()
+}

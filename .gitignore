@@ -1,0 +1,52 @@
+# macOS
+.DS_Store
+
+# Editors / IDEs
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# Python tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Local data and runtime state
+data/raw/
+runtime/*.json
+*.log
+
+# MLflow local state
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Java / Gradle
+.gradle/
+**/.gradle/
+**/build/
+**/out/
+
+# Generated archives
+*.zip
+*.tar
+*.tar.gz
+

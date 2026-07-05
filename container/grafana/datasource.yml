@@ -1,0 +1,25 @@
+apiVersion: 1
+datasources:
+  - name: Monitoring Postgres
+    uid: monitoring-postgres
+    type: postgres
+    access: proxy
+    orgId: 1
+    url: postgres:5432
+    database: monitoring
+    user: mlops
+    isDefault: true
+    editable: true
+    jsonData:
+      sslmode: disable
+    secureJsonData:
+      password: mlops
+
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    orgId: 1
+    url: http://prometheus:9090
+    isDefault: false
+    editable: true

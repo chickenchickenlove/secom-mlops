@@ -1,0 +1,3873 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 2,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 42,
+      "panels": [],
+      "title": "Serving Overview",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "id": 10,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  COUNT(*) AS total_predictions\nFROM prediction_logs\nWHERE predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds};\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Total Predictions",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 6,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "  SELECT\n    to_timestamp(floor(predicted_at / 60) * 60) AS time,\n    COUNT(*) AS prediction_count\n  FROM prediction_logs\n  WHERE predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1\n  ORDER BY 1;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Prediction Count",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "  SELECT\n    to_timestamp(floor(predicted_at / 60) * 60) AS time,\n    percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms) AS latency_p50_ms,\n    percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS latency_p95_ms\n  FROM prediction_logs\n  WHERE predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1\n  ORDER BY 1;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Prediction Latency p50/p95",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 7
+      },
+      "id": 18,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  runtime_slot,\n  model_name,\n  model_version,\n  model_alias,\n  model_run_id,\n  threshold,\n  COUNT(*) AS prediction_count,\n  COUNT(*) FILTER (WHERE predicted_value = 1) AS predicted_fail_count,\n  COUNT(*) FILTER (WHERE predicted_value = -1) AS predicted_pass_count,\n  MIN(to_timestamp(predicted_at)) AS first_prediction_time,\n  MAX(to_timestamp(predicted_at)) AS last_prediction_time\nFROM prediction_logs\nWHERE predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY runtime_slot, model_name, model_version, model_alias, model_run_id, threshold\nORDER BY prediction_count DESC;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Model Version / Alias / Threshold Traffic",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 7
+      },
+      "id": 49,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  runtime_slot,\n  target_alias,\n  active_model_version,\n  left(active_model_run_id, 8) AS active_run,\n  active_threshold,\n  previous_model_version,\n  left(previous_model_run_id, 8) AS previous_run,\n  previous_threshold,\n  last_operation,\n  to_timestamp(updated_at) AS updated_at\nFROM model_runtime_deployment_state\nWHERE model_name = 'secom-fail-detector'\nORDER BY CASE runtime_slot\n  WHEN 'release' THEN 1\n  WHEN 'canary' THEN 2\n  WHEN 'shadow' THEN 3\n  ELSE 9\nEND;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Active Runtime Deployment State",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 50,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  COUNT(*) AS total_predictions,\n  COUNT(a.sample_id) AS labeled_predictions,\n  ROUND((COUNT(a.sample_id)::numeric / NULLIF(COUNT(*), 0)), 4) AS label_coverage,\n  ROUND(\n    percentile_cont(0.50) WITHIN GROUP (ORDER BY (a.labeled_at - p.predicted_at))\n      FILTER (WHERE a.labeled_at IS NOT NULL)::numeric,\n    2\n  ) AS label_lag_p50_seconds,\n  ROUND(\n    percentile_cont(0.95) WITHIN GROUP (ORDER BY (a.labeled_at - p.predicted_at))\n      FILTER (WHERE a.labeled_at IS NOT NULL)::numeric,\n    2\n  ) AS label_lag_p95_seconds\nFROM prediction_logs p\nLEFT JOIN actual_labels a\n  ON a.sample_id = p.sample_id\nWHERE p.predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds};",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Label Coverage / Label Lag",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 37,
+      "panels": [],
+      "title": "Active Release Quality",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 21
+      },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  m.n_samples AS evaluated_samples,\n  m.n_fail_samples AS evaluated_fail_samples\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.metric_name = 'fail_f1'\nORDER BY m.computed_at DESC\nLIMIT 1;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Active Release Evaluated Samples",
+      "type": "stat",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 21
+      },
+      "id": 11,
+      "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  m.metric_value AS fail_f1\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.metric_name = 'fail_f1'\nORDER BY m.computed_at DESC\nLIMIT 1;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Active Release Latest Fail F1",
+      "type": "gauge",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 12,
+        "y": 21
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "all",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_f1'\nORDER BY time, metric;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fail F1 - Active Release",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 16,
+        "y": 21
+      },
+      "id": 43,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "all",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_recall'\nORDER BY time, metric;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fail Recall - Active Release",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 20,
+        "y": 21
+      },
+      "id": 44,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "all",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_precision'\nORDER BY time, metric;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fail Precision - Active Release",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 19,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nlatest_eval AS (\n  SELECT m.evaluation_id\n  FROM model_metrics m\n  JOIN active_release r\n    ON m.model_run_id = r.active_model_run_id\n   AND m.threshold IS NOT DISTINCT FROM r.active_threshold\n  WHERE m.metric_name = 'fail_f1'\n  ORDER BY m.computed_at DESC\n  LIMIT 1\n)\nSELECT\n  m.metric_name,\n  m.metric_value,\n  m.n_samples,\n  m.n_fail_samples,\n  m.model_run_id,\n  m.threshold,\n  to_timestamp(m.computed_at) AS computed_time\nFROM model_metrics m\nJOIN latest_eval e\n  ON e.evaluation_id = m.evaluation_id\nWHERE m.metric_name IN (\n  'accuracy',\n  'fail_precision',\n  'fail_recall',\n  'fail_f1',\n  'pr_auc'\n)\nORDER BY CASE m.metric_name\n  WHEN 'fail_f1' THEN 1\n  WHEN 'fail_recall' THEN 2\n  WHEN 'fail_precision' THEN 3\n  WHEN 'pr_auc' THEN 4\n  WHEN 'accuracy' THEN 5\n  ELSE 99\nEND;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Active Release Latest Labeled Quality",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 8,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nlatest_eval AS (\n  SELECT m.evaluation_id\n  FROM model_metrics m\n  JOIN active_release r\n    ON m.model_run_id = r.active_model_run_id\n   AND m.threshold IS NOT DISTINCT FROM r.active_threshold\n  WHERE m.metric_name = 'fail_f1'\n  ORDER BY m.computed_at DESC\n  LIMIT 1\n)\nSELECT\n  m.metric_name,\n  m.metric_value::INTEGER AS count\nFROM model_metrics m\nJOIN latest_eval e\n  ON e.evaluation_id = m.evaluation_id\nWHERE m.metric_name IN (\n  'true_negative',\n  'false_positive',\n  'false_negative',\n  'true_positive'\n)\nORDER BY CASE m.metric_name\n  WHEN 'true_negative' THEN 1\n  WHEN 'false_positive' THEN 2\n  WHEN 'false_negative' THEN 3\n  WHEN 'true_positive' THEN 4\nEND;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Active Release Confusion Matrix",
+      "type": "barchart",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\npredicted AS (\n  SELECT\n    floor(p.predicted_at / 60) * 60 AS bucket,\n    SUM(CASE WHEN p.predicted_value = 1 THEN 1 ELSE 0 END)::DOUBLE PRECISION\n      / NULLIF(COUNT(*), 0) AS predicted_fail_ratio\n  FROM prediction_logs p\n  JOIN active_release r\n    ON p.model_run_id = r.active_model_run_id\n   AND p.threshold IS NOT DISTINCT FROM r.active_threshold\n  WHERE p.predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND p.runtime_slot = 'release'\n  GROUP BY 1\n),\nactual AS (\n  SELECT\n    floor(p.predicted_at / 60) * 60 AS bucket,\n    SUM(CASE WHEN a.actual_value = 1 THEN 1 ELSE 0 END)::DOUBLE PRECISION\n      / NULLIF(COUNT(*), 0) AS actual_fail_ratio\n  FROM prediction_logs p\n  JOIN active_release r\n    ON p.model_run_id = r.active_model_run_id\n   AND p.threshold IS NOT DISTINCT FROM r.active_threshold\n  JOIN actual_labels a\n    ON a.sample_id = p.sample_id\n  WHERE p.predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND p.runtime_slot = 'release'\n  GROUP BY 1\n)\nSELECT\n  to_timestamp(COALESCE(p.bucket, a.bucket)) AS time,\n  p.predicted_fail_ratio,\n  a.actual_fail_ratio\nFROM predicted p\nFULL OUTER JOIN actual a ON a.bucket = p.bucket\nORDER BY 1;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Predicted vs Actual Fail Ratio - Active Release",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "  SELECT\n    to_timestamp(floor(predicted_at / 60) * 60) AS time,\n    predicted_label AS metric,\n    COUNT(*) AS value\n  FROM prediction_logs\n  WHERE predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1, 2\n  ORDER BY 1, 2;\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Predict Label Count",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "id": 36,
+      "panels": [],
+      "title": "Active vs Previous",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "id": 45,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nlatest AS (\n  SELECT DISTINCT ON (m.model_run_id, m.threshold, m.metric_name)\n    m.model_run_id,\n    m.threshold,\n    m.metric_name,\n    m.metric_value,\n    m.n_samples,\n    m.n_fail_samples,\n    m.computed_at\n  FROM model_metrics m\n  WHERE m.metric_name IN ('fail_f1', 'fail_recall', 'fail_precision', 'pr_auc', 'accuracy')\n  ORDER BY m.model_run_id, m.threshold, m.metric_name, m.computed_at DESC\n),\nactive AS (\n  SELECT l.*\n  FROM latest l\n  JOIN release_state r\n    ON l.model_run_id = r.active_model_run_id\n   AND l.threshold IS NOT DISTINCT FROM r.active_threshold\n),\nprevious AS (\n  SELECT l.*\n  FROM latest l\n  JOIN release_state r\n    ON l.model_run_id = r.previous_model_run_id\n   AND l.threshold IS NOT DISTINCT FROM r.previous_threshold\n)\nSELECT\n  a.metric_name,\n  a.metric_value AS active_value,\n  p.metric_value AS previous_value,\n  a.metric_value - p.metric_value AS delta,\n  a.n_samples AS active_samples,\n  a.n_fail_samples AS active_fail_samples,\n  to_timestamp(a.computed_at) AS active_computed_at\nFROM active a\nLEFT JOIN previous p\n  ON p.metric_name = a.metric_name\nORDER BY\n  CASE a.metric_name\n    WHEN 'fail_f1' THEN 1\n    WHEN 'fail_recall' THEN 2\n    WHEN 'fail_precision' THEN 3\n    WHEN 'pr_auc' THEN 4\n    WHEN 'accuracy' THEN 5\n    ELSE 99\n  END;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Active vs Previous Release - Latest Delta",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "id": 46,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "all",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nselected AS (\n  SELECT\n    active_model_run_id AS model_run_id,\n    active_threshold AS threshold,\n    'active' AS model_slot\n  FROM release_state\n\n  UNION ALL\n\n  SELECT\n    previous_model_run_id AS model_run_id,\n    previous_threshold AS threshold,\n    'previous' AS model_slot\n  FROM release_state\n  WHERE previous_model_run_id IS NOT NULL\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  s.model_slot || ' / fail_f1' AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN selected s\n  ON m.model_run_id = s.model_run_id\n AND m.threshold IS NOT DISTINCT FROM s.threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_f1'\nORDER BY time, metric;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Active vs Previous Release - F1 Trend",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      },
+      "id": 30,
+      "panels": [],
+      "title": "Drift / Data Quality - Fixed Reference",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "id": 31,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "  WITH latest AS (\n    SELECT evaluation_id\n    FROM drift_metrics\n    WHERE window_type = 'fixed_reference_time_window'\n      AND computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    ORDER BY computed_at DESC\n    LIMIT 1\n  )\n  SELECT\n    d.reference_baseline_id AS baseline_id,\n    b.baseline_name AS baseline,\n    d.model_run_id AS run_id,\n    d.threshold,\n    d.window_minutes AS window_min,\n    MAX(to_timestamp(d.computed_at)) AS computed_at,\n    MAX(to_timestamp(d.current_start)) AS current_start,\n    MAX(to_timestamp(d.current_end)) AS current_end,\n    MAX(d.current_samples) AS current_n,\n    MAX(d.baseline_samples) AS baseline_n,\n    COUNT(*) AS metric_rows\n  FROM drift_metrics d\n  JOIN latest l\n    ON l.evaluation_id = d.evaluation_id\n  LEFT JOIN drift_reference_baselines b\n    ON b.baseline_id = d.reference_baseline_id\n  GROUP BY\n    d.reference_baseline_id,\n    b.baseline_name,\n    d.model_run_id,\n    d.threshold,\n    d.window_minutes;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fixed Reference Drift Summary",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 68
+      },
+      "id": 32,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    to_timestamp(computed_at) AS time,\n    metric_name,\n    delta_value AS value\n  FROM drift_metrics\n  WHERE computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND window_type = 'fixed_reference_time_window'\n    AND metric_family = 'output'\n    AND metric_name IN (\n      'predicted_fail_ratio',\n      'fail_probability_avg',\n      'fail_probability_p50',\n      'fail_probability_p95'\n    )\n  ORDER BY time, metric_name;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fixed Reference Output Drift",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 68
+      },
+      "id": 33,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    to_timestamp(computed_at) AS time,\n    metric_name,\n    delta_value AS value\n  FROM drift_metrics\n  WHERE computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND window_type = 'fixed_reference_time_window'\n    AND metric_family = 'input'\n    AND metric_name IN (\n      'missing_count_avg',\n      'missing_count_p95',\n      'missing_count_max'\n    )\n  ORDER BY time, metric_name;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fixed Reference Missing Count Drift",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 76
+      },
+      "id": 48,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "  SELECT\n    feature_name AS feature,\n    ROUND(metric_value::numeric, 6) AS psi,\n    baseline_samples AS baseline_n,\n    current_samples AS current_n,\n    to_timestamp(computed_at) AS computed_at\n  FROM drift_metrics\n  WHERE evaluation_id = (\n    SELECT evaluation_id\n    FROM drift_metrics\n    WHERE window_type = 'fixed_reference_time_window'\n      AND metric_family = 'feature'\n      AND metric_name = 'feature_psi'\n      AND computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    ORDER BY computed_at DESC\n    LIMIT 1\n  )\n    AND window_type = 'fixed_reference_time_window'\n    AND metric_family = 'feature'\n    AND metric_name = 'feature_psi'\n  ORDER BY metric_value DESC NULLS LAST\n  LIMIT 30;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fixed Reference Top Feature PSI",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      },
+      "id": 34,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "\n  SELECT\n    feature_name AS feature,\n    ROUND(metric_value::numeric, 6) AS z_delta,\n    ROUND(baseline_value::numeric, 6) AS baseline_mean,\n    ROUND(current_value::numeric, 6) AS current_mean,\n    ROUND(delta_value::numeric, 6) AS raw_delta,\n    baseline_samples AS baseline_n,\n    current_samples AS current_n,\n    to_timestamp(computed_at) AS computed_at\n  FROM drift_metrics\n  WHERE evaluation_id = (\n    SELECT evaluation_id\n    FROM drift_metrics\n    WHERE window_type = 'fixed_reference_time_window'\n      AND metric_family = 'feature'\n      AND metric_name = 'feature_mean_standardized_delta'\n      AND computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    ORDER BY computed_at DESC\n    LIMIT 1\n  )\n    AND window_type = 'fixed_reference_time_window'\n    AND metric_family = 'feature'\n    AND metric_name = 'feature_mean_standardized_delta'\n  ORDER BY metric_value DESC NULLS LAST\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fixed Reference Top Feature Mean Shift",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 92
+      },
+      "id": 35,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": " SELECT\n    feature_name AS feature,\n    ROUND(metric_value::numeric, 6) AS abs_delta,\n    ROUND(baseline_value::numeric, 6) AS baseline_missing,\n    ROUND(current_value::numeric, 6) AS current_missing,\n    ROUND(delta_value::numeric, 6) AS signed_delta,\n    baseline_samples AS baseline_n,\n    current_samples AS current_n,\n    to_timestamp(computed_at) AS computed_at\n  FROM drift_metrics\n  WHERE evaluation_id = (\n    SELECT evaluation_id\n    FROM drift_metrics\n    WHERE window_type = 'fixed_reference_time_window'\n      AND metric_family = 'feature'\n      AND metric_name = 'feature_missing_ratio_abs_delta'\n      AND computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    ORDER BY computed_at DESC\n    LIMIT 1\n  )\n    AND window_type = 'fixed_reference_time_window'\n    AND metric_family = 'feature'\n    AND metric_name = 'feature_missing_ratio_abs_delta'\n  ORDER BY metric_value DESC NULLS LAST\n  LIMIT 30;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fixed Reference Top Feature Missing Shift",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 100
+      },
+      "id": 29,
+      "panels": [],
+      "title": "Drift / Data Quality - Recent vs Previous",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 101
+      },
+      "id": 28,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (window_type)\n    window_type,\n    evaluation_id,\n    computed_at\n  FROM drift_metrics\n  ORDER BY window_type, computed_at DESC\n)\nSELECT\n  d.window_type,\n  d.metric_family,\n  d.metric_name,\n  COUNT(*) AS row_count,\n  MAX(to_timestamp(d.computed_at)) AS latest_computed_time,\n  MAX(d.current_samples) AS current_samples,\n  MAX(d.baseline_samples) AS baseline_samples\nFROM drift_metrics d\nJOIN latest l\n  ON l.evaluation_id = d.evaluation_id\nGROUP BY d.window_type, d.metric_family, d.metric_name\nORDER BY d.window_type, d.metric_family, d.metric_name;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Drift Metrics Status",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 108
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp(computed_at) AS time,\n  metric_name,\n  current_value AS value\nFROM drift_metrics\nWHERE computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND window_type = 'recent_vs_previous_time_window'\n  AND metric_family = 'input'\n  AND metric_name IN (\n    'missing_count_avg',\n    'missing_count_p95',\n    'missing_count_max'\n  )\nORDER BY time, metric_name;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Recent vs Previous Missing Count",
+      "transformations": [
+        {
+          "id": "prepareTimeSeries",
+          "options": {
+            "format": "multi"
+          }
+        }
+      ],
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 108
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp(computed_at) AS time,\n  metric_name,\n  current_value AS value\nFROM drift_metrics\nWHERE computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND window_type = 'recent_vs_previous_time_window'\n  AND metric_family = 'output'\n  AND metric_name IN (\n    'fail_probability_avg',\n    'fail_probability_p50',\n    'fail_probability_p95'\n  )\nORDER BY time, metric_name;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Recent vs Previous Fail Probability",
+      "transformations": [
+        {
+          "id": "prepareTimeSeries",
+          "options": {
+            "format": "multi"
+          }
+        }
+      ],
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 116
+      },
+      "id": 20,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  feature_name,\n  ROUND(metric_value::numeric, 6) AS abs_null_ratio_delta,\n  ROUND(baseline_value::numeric, 6) AS baseline_null_ratio,\n  ROUND(current_value::numeric, 6) AS current_null_ratio,\n  ROUND(delta_value::numeric, 6) AS null_ratio_delta,\n  baseline_samples,\n  current_samples,\n  to_timestamp(computed_at) AS computed_time\nFROM drift_metrics\nWHERE evaluation_id = (\n  SELECT evaluation_id\n  FROM drift_metrics\n  WHERE window_type = 'recent_vs_previous_time_window'\n    AND metric_family = 'feature'\n    AND metric_name = 'feature_missing_ratio_abs_delta'\n    AND computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  ORDER BY computed_at DESC\n  LIMIT 1\n)\n  AND window_type = 'recent_vs_previous_time_window'\n  AND metric_family = 'feature'\n  AND metric_name = 'feature_missing_ratio_abs_delta'\nORDER BY metric_value DESC NULLS LAST\nLIMIT 30;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Recent vs Previous Top Feature Missing Shift",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "includeByName": {},
+            "indexByName": {
+              "abs_null_ratio_delta": 4,
+              "baseline_null_count": 7,
+              "baseline_null_ratio": 1,
+              "baseline_samples": 5,
+              "current_null_count": 8,
+              "current_null_ratio": 2,
+              "current_samples": 6,
+              "feature_name": 0,
+              "null_ratio_delta": 3
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 124
+      },
+      "id": 21,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  feature_name,\n  ROUND(metric_value::numeric, 6) AS standardized_mean_delta,\n  ROUND(baseline_value::numeric, 6) AS baseline_mean,\n  ROUND(current_value::numeric, 6) AS current_mean,\n  ROUND(delta_value::numeric, 6) AS mean_delta,\n  baseline_samples,\n  current_samples,\n  to_timestamp(computed_at) AS computed_time\nFROM drift_metrics\nWHERE evaluation_id = (\n  SELECT evaluation_id\n  FROM drift_metrics\n  WHERE window_type = 'recent_vs_previous_time_window'\n    AND metric_family = 'feature'\n    AND metric_name = 'feature_mean_standardized_delta'\n    AND computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  ORDER BY computed_at DESC\n  LIMIT 1\n)\n  AND window_type = 'recent_vs_previous_time_window'\n  AND metric_family = 'feature'\n  AND metric_name = 'feature_mean_standardized_delta'\nORDER BY metric_value DESC NULLS LAST\nLIMIT 30;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Recent vs Previous Top Feature Mean Shift",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "includeByName": {},
+            "indexByName": {
+              "baseline_mean": 2,
+              "baseline_non_null": 5,
+              "baseline_samples": 7,
+              "current_mean": 3,
+              "current_non_null": 6,
+              "current_samples": 8,
+              "feature_name": 0,
+              "mean_delta": 4,
+              "standardized_mean_delta": 1
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 132
+      },
+      "id": 27,
+      "panels": [],
+      "title": "Debug / Model Drilldown",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 133
+      },
+      "id": 47,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "all",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH selected_model AS (\n  SELECT\n    split_part('${model_run:raw}', '|', 1) AS model_run_id,\n    NULLIF(split_part('${model_run:raw}', '|', 2), 'null')::DOUBLE PRECISION AS threshold\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN selected_model s\n  ON m.model_run_id = s.model_run_id\n AND m.threshold IS NOT DISTINCT FROM s.threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name IN (${metric:sqlstring})\nORDER BY time, metric;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fail Metrics - Selected Model",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 133
+      },
+      "id": 9,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  runtime_slot,\n  model_run_id,\n  threshold,\n  COUNT(*) AS prediction_count,\n  MIN(to_timestamp(predicted_at)) AS first_prediction_time,\n  MAX(to_timestamp(predicted_at)) AS last_prediction_time\nFROM prediction_logs\nWHERE predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY runtime_slot, model_run_id, threshold\nORDER BY prediction_count DESC;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Model Run / Threshold Current Traffic",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 141
+      },
+      "id": 22,
+      "panels": [],
+      "title": "Debug / Quality Windows",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 142
+      },
+      "id": 25,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "  SELECT\n    window_id,\n    to_timestamp(window_start) AS window_start,\n    to_timestamp(window_end) AS window_end,\n    evaluation_status,\n    n_samples,\n    n_fail_samples,\n    accuracy,\n    fail_precision,\n    fail_recall,\n    fail_f1,\n    pr_auc,\n    true_negative,\n    false_positive,\n    false_negative,\n    true_positive\n  FROM model_quality_windows\n  ORDER BY window_end DESC\n  LIMIT 20;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Window Status Table",
+      "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 149
+      },
+      "id": 24,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "  SELECT\n    to_timestamp(window_end) AS time,\n    accuracy,\n    fail_precision,\n    fail_recall,\n    fail_f1,\n    pr_auc\n  FROM model_quality_windows\n  WHERE window_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND evaluation_status = 'ok'\n  ORDER BY time;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Window Quality Trend",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 149
+      },
+      "id": 26,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "  WITH latest AS (\n    SELECT *\n    FROM model_quality_windows\n    WHERE evaluation_status = 'ok'\n    ORDER BY window_end DESC\n    LIMIT 1\n  )\n  SELECT 'true_negative' AS bucket, true_negative AS count FROM latest\n  UNION ALL\n  SELECT 'false_positive', false_positive FROM latest\n  UNION ALL\n  SELECT 'false_negative', false_negative FROM latest\n  UNION ALL\n  SELECT 'true_positive', true_positive FROM latest;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Latest Quality Confusion Matrix",
+      "type": "barchart",
+      "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 157
+      },
+      "id": 23,
+      "panels": [],
+      "title": "Infrastructure / Kafka",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "mps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 159
+      },
+      "id": 38,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (topic) (\n  rate(kafka_server_brokertopicmetrics_messagesinpersec_total{\n    topic!=\"__consumer_offsets\",\n    topic!=\"\",\n    topic!~\".*-(changelog|repartition)$\"\n  }[1m])\n)\n",
+          "instant": false,
+          "legendFormat": "{{topic}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Kafka Messages In/sec by Topic",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 159
+      },
+      "id": 39,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (topic) (\n  rate(kafka_server_brokertopicmetrics_bytesinpersec_total{\n    topic!=\"__consumer_offsets\",\n    topic!=\"\",\n    topic!~\".*-(changelog|repartition)$\"\n  }[1m])\n)\n",
+          "instant": false,
+          "legendFormat": "{{topic}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Kafka Bytes In/sec by Topic",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 167
+      },
+      "id": 41,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "sortBy": "Name",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "  sum by (consumergroup, topic) (\n    kafka_consumergroup_lag{\n      topic!=\"__consumer_offsets\",\n      topic!=\"\",\n      topic!~\".*-(changelog|repartition)$\"\n    }\n  )\n",
+          "instant": false,
+          "legendFormat": "{{consumergroup}} · {{topic}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Kafka Consumer Lag by Group/Topic",
+      "type": "timeseries",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 167
+      },
+      "id": 40,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (topic) (\n  rate(kafka_server_brokertopicmetrics_bytesoutpersec_total{\n    topic!=\"__consumer_offsets\",\n    topic!=\"\",\n    topic!~\".*-(changelog|repartition)$\"\n  }[1m])\n)\n",
+          "instant": false,
+          "legendFormat": "{{topic}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Kafka Bytes Out/sec by Topic",
+      "type": "timeseries",
+      "collapsed": false
+    }
+  ],
+  "preload": false,
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "15",
+          "value": "15"
+        },
+        "name": "drift_window_minutes",
+        "options": [
+          {
+            "selected": false,
+            "text": "5",
+            "value": "5"
+          },
+          {
+            "selected": false,
+            "text": "10",
+            "value": "10"
+          },
+          {
+            "selected": true,
+            "text": "15",
+            "value": "15"
+          },
+          {
+            "selected": false,
+            "text": "30",
+            "value": "30"
+          },
+          {
+            "selected": false,
+            "text": "60",
+            "value": "60"
+          }
+        ],
+        "query": "5,10,15,30,60",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "text": "release,canary,shadow / run=a2e83910 / th=0.2",
+          "value": "a2e839106a1843688c4e374ee68e9a8e|0.2"
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "monitoring-postgres"
+        },
+        "definition": "WITH combos AS (\n  SELECT DISTINCT\n    model_run_id,\n    threshold\n  FROM model_metrics\n),\nruntime AS (\n  SELECT\n    runtime_slot,\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n),\nannotated AS (\n  SELECT\n    c.model_run_id,\n    c.threshold,\n    string_agg(\n      r.runtime_slot,\n      ',' ORDER BY CASE r.runtime_slot\n        WHEN 'release' THEN 1\n        WHEN 'canary' THEN 2\n        WHEN 'shadow' THEN 3\n        ELSE 9\n      END\n    ) FILTER (WHERE r.runtime_slot IS NOT NULL) AS runtime_slots\n  FROM combos c\n  LEFT JOIN runtime r\n    ON r.active_model_run_id = c.model_run_id\n   AND r.active_threshold IS NOT DISTINCT FROM c.threshold\n  GROUP BY c.model_run_id, c.threshold\n)\nSELECT\n  COALESCE(\n    runtime_slots || ' / run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null'),\n    'run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null')\n  ) AS __text,\n  model_run_id || '|' || COALESCE(threshold::text, 'null') AS __value\nFROM annotated\nORDER BY\n  CASE\n    WHEN runtime_slots LIKE '%release%' THEN 0\n    WHEN runtime_slots LIKE '%canary%' THEN 1\n    WHEN runtime_slots LIKE '%shadow%' THEN 2\n    ELSE 3\n  END,\n  __text;",
+        "includeAll": false,
+        "label": "Model run / threshold",
+        "name": "model_run",
+        "options": [],
+        "query": "WITH combos AS (\n  SELECT DISTINCT\n    model_run_id,\n    threshold\n  FROM model_metrics\n),\nruntime AS (\n  SELECT\n    runtime_slot,\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n),\nannotated AS (\n  SELECT\n    c.model_run_id,\n    c.threshold,\n    string_agg(\n      r.runtime_slot,\n      ',' ORDER BY CASE r.runtime_slot\n        WHEN 'release' THEN 1\n        WHEN 'canary' THEN 2\n        WHEN 'shadow' THEN 3\n        ELSE 9\n      END\n    ) FILTER (WHERE r.runtime_slot IS NOT NULL) AS runtime_slots\n  FROM combos c\n  LEFT JOIN runtime r\n    ON r.active_model_run_id = c.model_run_id\n   AND r.active_threshold IS NOT DISTINCT FROM c.threshold\n  GROUP BY c.model_run_id, c.threshold\n)\nSELECT\n  COALESCE(\n    runtime_slots || ' / run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null'),\n    'run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null')\n  ) AS __text,\n  model_run_id || '|' || COALESCE(threshold::text, 'null') AS __value\nFROM annotated\nORDER BY\n  CASE\n    WHEN runtime_slots LIKE '%release%' THEN 0\n    WHEN runtime_slots LIKE '%canary%' THEN 1\n    WHEN runtime_slots LIKE '%shadow%' THEN 2\n    ELSE 3\n  END,\n  __text;",
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": [
+            "$__all"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "label": "Metric",
+        "multi": true,
+        "name": "metric",
+        "options": [
+          {
+            "selected": false,
+            "text": "fail_precision",
+            "value": "fail_precision"
+          },
+          {
+            "selected": false,
+            "text": "fail_recall",
+            "value": "fail_recall"
+          },
+          {
+            "selected": false,
+            "text": "fail_f1",
+            "value": "fail_f1"
+          }
+        ],
+        "query": "fail_precision,fail_recall,fail_f1",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "SECOM Monitoring",
+  "uid": "cfqhrqhenyrr4f",
+  "version": 4
+}

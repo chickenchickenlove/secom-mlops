@@ -1,0 +1,632 @@
+  services:
+    postgres:
+      image: postgres:16
+      environment:
+        POSTGRES_USER: mlops
+        POSTGRES_PASSWORD: mlops
+        POSTGRES_DB: monitoring
+      ports:
+        - "5432:5432"
+      volumes:
+        - monitoring_postgres_data:/var/lib/postgresql/data
+        - ./postgres/monitoring-schema.sql:/docker-entrypoint-initdb.d/001_monitoring_schema.sql:ro
+        - ./postgres/init-mlflow-db.sql:/docker-entrypoint-initdb.d/002_init_mlflow_db.sql:ro
+        - ./postgres/init-airflow-db.sql:/docker-entrypoint-initdb.d/003_init_airflow_db.sql:ro
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U mlops -d monitoring"]
+        interval: 5s
+        timeout: 3s
+        retries: 20
+
+    kafka:
+      build:
+        context: .
+        dockerfile: dockerfiles/kafka.Dockerfile
+      hostname: kafka
+      container_name: monitoring-kafka
+      ports:
+        - "9092:9092"
+        - "7071:7071"
+      environment:
+        KAFKA_OPTS: -javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent.jar=7071:/opt/jmx-exporter/kafka-jmx-exporter.yml
+        KAFKA_NODE_ID: 1
+        KAFKA_PROCESS_ROLES: broker,controller
+        KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+        KAFKA_LISTENERS: CONTROLLER://:9093,PLAINTEXT://:29092,PLAINTEXT_HOST://:9092
+        KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+        KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+        KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+        KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+        CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+        KAFKA_LOG_DIRS: /var/lib/kafka/data
+        KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+        KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+        KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+        KAFKA_NUM_PARTITIONS: 3
+      volumes:
+        - monitoring_kafka_data:/var/lib/kafka/data
+      healthcheck:
+        test: [ "CMD-SHELL", "env -u KAFKA_OPTS /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1" ]
+        interval: 5s
+        timeout: 5s
+        retries: 20
+
+    kafka-init:
+      image: apache/kafka:4.3.1
+      depends_on:
+        kafka:
+          condition: service_healthy
+      entrypoint:
+        - /bin/sh
+        - -ec
+        - |
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic secom-feature-patches --partitions 3 --replication-factor 1
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic secom-feature-state-updates --partitions 3 --replication-factor 1
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic secom-label-events --partitions 3 --replication-factor 1
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic secom-prediction-events --partitions 3 --replication-factor 1
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
+      restart: "no"
+
+    prometheus:
+      image: prom/prometheus:v2.55.1
+      ports:
+        - "9090:9090"
+      volumes:
+        - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+        - monitoring_prometheus_data:/prometheus
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-exporter:
+          condition: service_started
+      restart: unless-stopped
+
+    kafka-exporter:
+      image: danielqsj/kafka-exporter:v1.8.0
+      command:
+        - --kafka.server=kafka:29092
+        - --web.listen-address=:9308
+      ports:
+        - "9308:9308"
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+      restart: unless-stopped
+
+    valkey:
+      image: valkey/valkey:8-alpine
+      command: [ "valkey-server" ]
+      ports:
+        - "6379:6379"
+      volumes:
+        - monitoring_valkey_data:/data
+      healthcheck:
+        test: [ "CMD", "valkey-cli", "ping" ]
+        interval: 5s
+        timeout: 3s
+        retries: 10
+
+    grafana:
+      image: grafana/grafana:11.6.16
+      environment:
+        GF_AUTH_ANONYMOUS_ENABLED: "true"
+        GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+        GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      ports:
+        - "3000:3000"
+      volumes:
+        - monitoring_grafana_data:/var/lib/grafana
+        - ./grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+        - ./grafana/dashboard-provider.yml:/etc/grafana/provisioning/dashboards/monitoring.yml:ro
+        - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      depends_on:
+        - postgres
+        - prometheus
+
+
+    ########### AirFlow
+    airflow-init:
+      build:
+        context: .
+        dockerfile: dockerfiles/airflow.Dockerfile
+      depends_on:
+        postgres:
+          condition: service_healthy
+        mlflow:
+          condition: service_healthy
+      environment:
+        AIRFLOW__CORE__EXECUTOR: LocalExecutor
+        AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+        AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+        AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Seoul
+        AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://mlops:mlops@postgres:5432/airflow
+        AIRFLOW__WEBSERVER__SECRET_KEY: local-airflow-secret-key
+        MLFLOW_TRACKING_URI: http://mlflow:5100
+        ML_URL: http://mlflow:5100
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+        ML_PROJECT_DIR: /opt/airflow/mlops
+      volumes:
+        - ../airflow/dags:/opt/airflow/dags:ro
+        - ..:/opt/airflow/mlops:ro
+        - monitoring_airflow_logs:/opt/airflow/logs
+      command:
+        - bash
+        - -c
+        - |
+          set -e
+          airflow db migrate
+          airflow users create \
+            --username admin \
+            --password admin \
+            --firstname Local \
+            --lastname Admin \
+            --role Admin \
+            --email admin@example.com || true
+      restart: "no"
+
+    airflow-webserver:
+      build:
+        context: .
+        dockerfile: dockerfiles/airflow.Dockerfile
+      depends_on:
+        airflow-init:
+          condition: service_completed_successfully
+        mlflow:
+          condition: service_healthy
+      environment:
+        AIRFLOW__CORE__EXECUTOR: LocalExecutor
+        AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+        AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+        AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Seoul
+        AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://mlops:mlops@postgres:5432/airflow
+        AIRFLOW__WEBSERVER__SECRET_KEY: local-airflow-secret-key
+        MLFLOW_TRACKING_URI: http://mlflow:5100
+        ML_URL: http://mlflow:5100
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+        ML_PROJECT_DIR: /opt/airflow/mlops
+      volumes:
+        - ../airflow/dags:/opt/airflow/dags:ro
+        - ..:/opt/airflow/mlops:ro
+        - ./airflow/webserver_config.py:/opt/airflow/webserver_config.py:ro
+        - monitoring_airflow_logs:/opt/airflow/logs
+      command:
+        - webserver
+      ports:
+        - "8081:8080"
+      restart: unless-stopped
+
+    airflow-scheduler:
+      build:
+        context: .
+        dockerfile: dockerfiles/airflow.Dockerfile
+      depends_on:
+        airflow-init:
+          condition: service_completed_successfully
+        mlflow:
+          condition: service_healthy
+      environment:
+        AIRFLOW__CORE__EXECUTOR: LocalExecutor
+        AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+        AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+        AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Seoul
+        AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://mlops:mlops@postgres:5432/airflow
+        AIRFLOW__WEBSERVER__SECRET_KEY: local-airflow-secret-key
+        MLFLOW_TRACKING_URI: http://mlflow:5100
+        ML_URL: http://mlflow:5100
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+        ML_PROJECT_DIR: /opt/airflow/mlops
+        MODEL_GATEWAY_ADMIN_URL: http://model-gateway:18080
+      volumes:
+        - ../airflow/dags:/opt/airflow/dags:ro
+        - ..:/opt/airflow/mlops:ro
+        - monitoring_airflow_logs:/opt/airflow/logs
+      command:
+        - scheduler
+      restart: unless-stopped
+
+
+    ####### For data pipe line.
+    feature-raw-archiver:
+      build:
+        context: ../feature-raw-archiver
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+        postgres:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        FEATURE_PATCHES_TOPIC: secom-feature-patches
+        KAFKA_GROUP_ID: secom-feature-raw-archiver
+        KAFKA_CLIENT_ID: secom-feature-raw-archiver
+        KAFKA_AUTO_OFFSET_RESET: earliest
+        MONITORING_JDBC_URL: jdbc:postgresql://postgres:5432/monitoring
+        MONITORING_DB_USER: mlops
+        MONITORING_DB_PASSWORD: mlops
+      restart: unless-stopped
+
+    feature-snapshot-archiver:
+      build:
+        context: ../feature-snapshot-archiver
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+        postgres:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        FEATURE_STATE_UPDATES_TOPIC: secom-feature-state-updates
+        KAFKA_GROUP_ID: secom-feature-snapshot-archiver
+        KAFKA_CLIENT_ID: secom-feature-snapshot-archiver
+        KAFKA_AUTO_OFFSET_RESET: latest
+        MONITORING_JDBC_URL: jdbc:postgresql://postgres:5432/monitoring
+        MONITORING_DB_USER: mlops
+        MONITORING_DB_PASSWORD: mlops
+      restart: unless-stopped
+
+    feature-assembler:
+      build:
+        context: ../fdc-feature-assembler
+      depends_on:
+        kafka:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        FEATURE_ASSEMBLER_APPLICATION_ID: secom-feature-assembler
+        FEATURE_PATCHES_TOPIC: secom-feature-patches
+        FEATURE_STATE_UPDATES_TOPIC: secom-feature-state-updates
+        FEATURE_ASSEMBLER_STATE_DIR: /var/lib/secom-feature-assembler
+        KAFKA_AUTO_OFFSET_RESET: latest
+      volumes:
+        - monitoring_feature_assembler_state:/var/lib/secom-feature-assembler
+      restart: unless-stopped
+
+    feature-materializer:
+      build:
+        context: ../fdc-feature-materializer
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+        valkey:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        FEATURE_STATE_UPDATES_TOPIC: secom-feature-state-updates
+        KAFKA_GROUP_ID: secom-feature-state-materializer
+        KAFKA_CLIENT_ID: secom-feature-state-materializer
+        KAFKA_AUTO_OFFSET_RESET: latest
+        VALKEY_HOST: valkey
+        VALKEY_PORT: "6379"
+        VALKEY_VERIFY_WRITE: "true"
+      restart: unless-stopped
+
+    mlflow:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/mlflow.Dockerfile
+      depends_on:
+        postgres:
+          condition: service_healthy
+      command:
+        - mlflow
+        - server
+        - --backend-store-uri
+        - postgresql+psycopg2://mlops:mlops@postgres:5432/mlflow
+        - --serve-artifacts
+        - --artifacts-destination
+        - /mlflow/mlartifacts
+        - --default-artifact-root
+        - mlflow-artifacts:/
+        - --host
+        - 0.0.0.0
+        - --port
+        - "5100"
+        - --allowed-hosts
+        - localhost,127.0.0.1,mlflow,mlflow:5100,localhost:5100,127.0.0.1:5100
+      ports:
+        - "5100:5100"
+      volumes:
+        - monitoring_mlflow_data:/mlflow
+      restart: unless-stopped
+      healthcheck:
+        test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5100/health', timeout=2)\""]
+        interval: 5s
+        timeout: 3s
+        retries: 20
+
+    model-trainer:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        mlflow:
+          condition: service_healthy
+      environment:
+        MLFLOW_TRACKING_URI: http://mlflow:5100
+        ML_MODEL_NAME: secom-fail-detector
+        ML_MODEL_ALIAS: champion
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+      volumes:
+        - ../data:/app/data:ro
+      command:
+        - python
+        - secom_mlops/models/mlflow_random_forest_tracking.py
+      restart: "no"
+
+    ### Server
+    model-server-release:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        mlflow:
+          condition: service_healthy
+        model-trainer:
+          condition: service_completed_successfully
+      environment:
+        ML_URL: http://mlflow:5100
+        ML_MODEL_NAME: secom-fail-detector
+        ML_MODEL_ALIAS: champion
+        MODEL_RUNTIME_SLOT: release
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+      command:
+        - uvicorn
+        - secom_mlops.serving.model_server:app
+        - --host
+        - 0.0.0.0
+        - --port
+        - "28091"
+      ports:
+        - "28091:28091"
+      healthcheck:
+        test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:28091/health')\""]
+        interval: 5s
+        retries: 20
+      restart: unless-stopped
+
+    model-server-canary:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        mlflow:
+          condition: service_healthy
+        model-trainer:
+          condition: service_completed_successfully
+      environment:
+        ML_URL: http://mlflow:5100
+        ML_MODEL_NAME: secom-fail-detector
+        ML_MODEL_ALIAS: champion
+        MODEL_RUNTIME_SLOT: canary
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+      command:
+        - uvicorn
+        - secom_mlops.serving.model_server:app
+        - --host
+        - 0.0.0.0
+        - --port
+        - "28092"
+      ports:
+        - "28092:28092"
+      healthcheck:
+        test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:28092/health')\""]
+        interval: 5s
+        retries: 20
+      restart: unless-stopped
+
+    model-server-shadow:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        mlflow:
+          condition: service_healthy
+        model-trainer:
+          condition: service_completed_successfully
+      environment:
+        ML_URL: http://mlflow:5100
+        ML_MODEL_NAME: secom-fail-detector
+        ML_MODEL_ALIAS: champion
+        MODEL_RUNTIME_SLOT: shadow
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+      command:
+        - uvicorn
+        - secom_mlops.serving.model_server:app
+        - --host
+        - 0.0.0.0
+        - --port
+        - "28093"
+      ports:
+        - "28093:28093"
+      healthcheck:
+        test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:28093/health')\""]
+        interval: 5s
+        retries: 20
+      restart: unless-stopped
+
+    model-gateway:
+      build:
+        context: .
+        dockerfile: dockerfiles/nginx.Dockerfile
+      depends_on:
+        model-server-release:
+          condition: service_healthy
+        model-server-canary:
+          condition: service_healthy
+        model-server-shadow:
+          condition: service_healthy
+      ports:
+        - "8090:8080"
+        - "18080:18080"
+      healthcheck:
+        test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
+        interval: 5s
+        retries: 20
+      restart: unless-stopped
+
+
+    serving-api:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+        valkey:
+          condition: service_healthy
+        model-gateway:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        PREDICTION_EVENTS_TOPIC: secom-prediction-events
+        VALKEY_HOST: valkey
+        VALKEY_PORT: "6379"
+        MODEL_GATEWAY_URL: http://model-gateway:8080
+        MODEL_BATCH_MAX_SIZE: "16"
+        MODEL_BATCH_MAX_WAIT_MS: "20"
+        MODEL_BATCH_QUEUE_TIMEOUT_MS: "2000"
+        MODEL_BATCH_RESPONSE_TIMEOUT_SECONDS: "30"
+        MODEL_BATCH_QUEUE_MAX_SIZE: "1024"
+        PREDICT_PARTIAL_RETRY_AFTER_MS: "200"
+      command:
+        - uvicorn
+        - secom_mlops.serving.api:app
+        - --host
+        - 0.0.0.0
+        - --port
+        - "8080"
+      ports:
+        - "8080:8080"
+      healthcheck:
+        test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)\""]
+        interval: 5s
+        timeout: 3s
+        retries: 20
+      restart: unless-stopped
+
+    prediction-log-archiver:
+      build:
+        context: ../prediction-log-archiver
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+        postgres:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        PREDICTION_EVENTS_TOPIC: secom-prediction-events
+        KAFKA_GROUP_ID: secom-prediction-log-archiver
+        KAFKA_CLIENT_ID: secom-prediction-log-archiver
+        KAFKA_AUTO_OFFSET_RESET: earliest
+        MONITORING_JDBC_URL: jdbc:postgresql://postgres:5432/monitoring
+        MONITORING_DB_USER: mlops
+        MONITORING_DB_PASSWORD: mlops
+      restart: unless-stopped
+
+    label-archiver:
+      build:
+        context: ../label-archiver
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+        postgres:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        LABEL_EVENTS_TOPIC: secom-label-events
+        KAFKA_GROUP_ID: secom-label-archiver
+        KAFKA_CLIENT_ID: secom-label-archiver
+        KAFKA_AUTO_OFFSET_RESET: latest
+        MONITORING_JDBC_URL: jdbc:postgresql://postgres:5432/monitoring
+        MONITORING_DB_USER: mlops
+        MONITORING_DB_PASSWORD: mlops
+      restart: unless-stopped
+
+    metrics-evaluator:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        postgres:
+          condition: service_healthy
+      environment:
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+        EVALUATION_INTERVAL_SECONDS: "30"
+        PREDICTION_WINDOW_LIMIT: "500"
+        MODEL_METRIC_LIMIT: "500"
+        MIN_FAIL_COUNT: "1"
+      command:
+        - python
+        - scripts/monitoring/run_metrics_evaluator_loop.py
+      restart: unless-stopped
+
+    quality-window-evaluator:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        postgres:
+          condition: service_healthy
+      environment:
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+      command:
+        - python
+        - scripts/monitoring/evaluate_model_quality_windows.py
+        - --loop
+        - --interval-seconds
+        - "30"
+        - --window-size
+        - "500"
+        - --min-fail-samples
+        - "10"
+      restart: unless-stopped
+
+    drift-metrics-evaluator:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        postgres:
+          condition: service_healthy
+      environment:
+        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
+      command:
+        - python
+        - scripts/monitoring/evaluate_drift_metrics.py
+        - --loop
+        - --interval-seconds
+        - "30"
+        - --window-minutes
+        - "5"
+        - --top-n-features
+        - "30"
+        - --min-feature-non-null
+        - "30"
+        - --min-feature-samples
+        - "30"
+      restart: unless-stopped
+
+  volumes:
+    monitoring_postgres_data:
+    monitoring_valkey_data:
+    monitoring_kafka_data:
+    monitoring_grafana_data:
+    monitoring_prometheus_data:
+    monitoring_feature_assembler_state:
+    monitoring_mlflow_data:
+    monitoring_airflow_logs:

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secom-mlops"
+version = "0.1.0"
+requires-python = ">= 3.11, < 3.12"
+dependencies = [
+    "pandas>=2.2,<3",
+    "numpy==1.26.0",
+    "pandas-stubs>=2.2,<3",
+    "scikit-learn==1.9.0",
+    "mlflow==3.14.0",
+    "fastapi[standard]>=0.138.1",
+    "psycopg[binary]>=3.2,<4",
+    "confluent-kafka>=2.5,<3",
+    "valkey>=6.1,<7",
+    "httpx>=0.28,<1",
+    "apache-airflow==2.10.5",
+]
+
+[tool.uv]
+environments = ["sys_platform == 'darwin'"]
+
+[tool.setuptools.packages.find]
+exclude = ["data*", "mlruns*", "mlartifacts*", "build*", "docs*", "scripts*"]
