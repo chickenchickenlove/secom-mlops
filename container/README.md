@@ -40,7 +40,7 @@ secom-label-events
 -> PostgreSQL actual_labels
 
 Prediction evidence store:
-serving-api
+serving-api /predict-by-id
 -> secom-prediction-events
 -> prediction-log-archiver
 -> PostgreSQL prediction_logs
@@ -59,10 +59,26 @@ prediction_logs + actual_labels
 
 Drift metrics:
 prediction_logs
+  + serving_feature_snapshots
+    logical join = serving_snapshot_id + sample_id + snapshot_version
 -> drift-metrics-evaluator
 -> drift_metrics
 -> Grafana
 ```
+
+Operational prediction evidence is emitted only by `/predict-by-id`. Each row
+records the `serving_snapshot_id` and sample-local `snapshot_version` used for
+inference. `/predict` accepts caller-supplied feature vectors and is a debug
+endpoint, so it does not emit operational prediction evidence.
+
+The three feature-vector consumers
+`evaluate_drift_metrics.py`, `create_drift_reference_baseline.py`, and
+`evaluate_fixed_reference_drift_metrics.py` join `prediction_logs` to
+`serving_feature_snapshots` on the logical triple `serving_snapshot_id +
+sample_id + snapshot_version` and read `serving_feature_snapshots.features_json`.
+Prediction events and `prediction_logs` do not duplicate the full feature
+vector. The small `missing_count` scalar remains in prediction logs. The
+snapshot reference is intentionally logical; there is no foreign key.
 
 ## Start
 
@@ -198,6 +214,10 @@ uv run python scripts/workload/request_predictions_from_cursor.py \
   --print-failures
 ```
 
+This workload calls `/predict-by-id`, so successful requests create
+snapshot-backed operational prediction evidence. Direct `/predict` calls are
+debug-only and do not create rows in `prediction_logs`.
+
 The cursor state file is:
 
 ```text
@@ -280,6 +300,9 @@ LEFT JOIN actual_labels a ON a.sample_id = f.sample_id;
 docker-compose exec postgres psql -U mlops -d monitoring -c "
 SELECT
   COUNT(*) AS prediction_count,
+  COUNT(DISTINCT serving_snapshot_id) AS serving_snapshot_count,
+  MIN(snapshot_version) AS min_snapshot_version,
+  MAX(snapshot_version) AS max_snapshot_version,
   COUNT(*) FILTER (WHERE predicted_label = 'fail') AS predicted_fail_count,
   COUNT(*) FILTER (WHERE predicted_label = 'pass') AS predicted_pass_count,
   MIN(sample_id) AS first_sample_id,
@@ -435,6 +458,11 @@ spine, reconstructs features from `feature_events`, joins labels by
 `sample_point_time <= labeled_at`, trains a RandomForest
 candidate, registers a new `secom-fail-detector` model version, points the
 `candidate` alias to it, and writes model version tags such as:
+
+`serving_feature_snapshots` also records the sample-local `snapshot_version` and
+the Valkey-confirmed `available_at`. The current trainer has not switched to an
+availability-time cutoff: its point time and window filters still use the assembler
+event-time field `snapshot_time`.
 
 ```text
 role=candidate
@@ -816,7 +844,10 @@ decisions. `insufficient_samples` is normally the latest in-progress window.
 ## Verify Drift Metrics
 
 `drift-metrics-evaluator` computes recent-vs-previous drift metrics from
-`prediction_logs`.
+`prediction_logs`. Feature-vector metrics read
+`serving_feature_snapshots.features_json` through the logical triple join on
+`serving_snapshot_id`, `sample_id`, and `snapshot_version`; input missing-count
+metrics continue to read `prediction_logs.missing_count`.
 
 ```text
 window type = recent_vs_previous_time_window
@@ -887,9 +918,9 @@ LIMIT 80;
 "
 ```
 
-Grafana drift panels should read from `drift_metrics`. The older dashboard
-queries that expand `prediction_logs.features_json` directly are useful for
-debugging but should not be the primary monitoring path.
+Grafana drift panels should read from `drift_metrics`. Prediction logs do not
+store a duplicate feature vector; feature drift consumers resolve it from
+`serving_feature_snapshots` through the logical triple join.
 
 Latest model traffic:
 

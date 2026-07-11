@@ -34,7 +34,7 @@ public final class KafkaFeatureStateConsumer implements AutoCloseable {
     }
 
     public void commit(ConsumerRecord<String, String> record) {
-        TopicPartition topicPartition = new TopicPartition(record.topic(), record.partition());
+        final TopicPartition topicPartition = new TopicPartition(record.topic(), record.partition());
 
         consumer.commitSync(Map.of(
             topicPartition,
@@ -52,7 +52,7 @@ public final class KafkaFeatureStateConsumer implements AutoCloseable {
     }
 
     private static Properties consumerProperties(MaterializerConfig config) {
-        Properties props = new Properties();
+        final Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
         props.put(ConsumerConfig.GROUP_ID_CONFIG, config.groupId());
         props.put(ConsumerConfig.CLIENT_ID_CONFIG, config.clientId());

@@ -120,13 +120,14 @@ public final class FeatureStateProcessor implements Processor<String, String, St
             }
         }
 
-        int featureCount = observedFeatures.size();
-        boolean isComplete = featureCount == NUM_FEATURES;
-        double snapshotTime = state.path("window_end").asDouble(state.path("last_event_time").asDouble());
-        int sourceEventCount = state.path("source_event_count").asInt();
+        final int featureCount = observedFeatures.size();
+        final boolean isComplete = featureCount == NUM_FEATURES;
+        final double snapshotTime = state.path("window_end").asDouble(state.path("last_event_time").asDouble());
+        final int sourceEventCount = state.path("source_event_count").asInt();
+        final int snapshotVersion = sourceEventCount;
 
         ObjectNode output = MAPPER.createObjectNode();
-        output.put("serving_snapshot_id", "state:" + sampleId + ":" + (long) (snapshotTime * 1000) + ":" + sourceEventCount);
+        output.put("serving_snapshot_id", "state:" + sampleId + ":" + (long) (snapshotTime * 1000) + ":" + snapshotVersion);
         output.put("sample_id", sampleId);
         output.put("snapshot_time", snapshotTime);
         output.put("window_start", state.path("window_start").asDouble(snapshotTime));
@@ -137,6 +138,7 @@ public final class FeatureStateProcessor implements Processor<String, String, St
         output.put("is_complete", isComplete);
         output.set("features", canonicalFeatures);
         output.put("source_event_count", sourceEventCount);
+        output.put("snapshot_version", snapshotVersion);
         putIfPresent(output, state, "last_feature_group");
         putIfPresent(output, state, "last_event_id");
         putIfPresent(output, state, "simulation_run_id");

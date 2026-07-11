@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 final class PredictionLogParser {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Pattern SAMPLE_ID_PATTERN = Pattern.compile("^secom-\\d{7}$");
-    private static final int NUM_FEATURES = 590;
+    private static final int MAX_MISSING_COUNT = 590;
 
     private PredictionLogParser() {
     }
@@ -39,6 +39,8 @@ final class PredictionLogParser {
         String predictionId = requiredText(event, "prediction_id");
         String requestId = requiredText(event, "request_id");
         String sampleId = requiredText(event, "sample_id");
+        String servingSnapshotId = requiredText(event, "serving_snapshot_id");
+        long snapshotVersion = requiredPositiveLong(event, "snapshot_version");
 
         if (!SAMPLE_ID_PATTERN.matcher(sampleId).matches()) {
             throw new IllegalArgumentException("invalid sample_id: " + sampleId);
@@ -64,7 +66,6 @@ final class PredictionLogParser {
         int predictedValue = requiredInt(event, "predicted_value");
         String predictedLabel = requiredText(event, "predicted_label");
         double threshold = requiredProbability(event, "threshold");
-        JsonNode features = requiredArray(event, "features");
         int missingCount = requiredInt(event, "missing_count");
         double latencyMs = requiredNonNegativeNumber(event, "latency_ms");
 
@@ -79,13 +80,10 @@ final class PredictionLogParser {
             );
         }
 
-        String featuresJson = validateFeatures(features, sampleId);
-        int computedMissingCount = computeMissingCount(features);
-        if (missingCount != computedMissingCount) {
+        if (missingCount < 0 || missingCount > MAX_MISSING_COUNT) {
             throw new IllegalArgumentException(
-                "missing_count mismatch: sample_id=" + sampleId
+                "missing_count must be between 0 and 590: sample_id=" + sampleId
                     + " missing_count=" + missingCount
-                    + " computed_missing_count=" + computedMissingCount
             );
         }
 
@@ -93,6 +91,8 @@ final class PredictionLogParser {
             predictionId,
             requestId,
             sampleId,
+            servingSnapshotId,
+            snapshotVersion,
             modelRunId,
             modelName,
             modelVersion,
@@ -104,52 +104,9 @@ final class PredictionLogParser {
             predictedValue,
             predictedLabel,
             threshold,
-            featuresJson,
             missingCount,
             latencyMs
         );
-    }
-
-    private static String validateFeatures(JsonNode features, String sampleId) {
-        if (features.size() != NUM_FEATURES) {
-            throw new IllegalArgumentException(
-                "features must contain 590 values: sample_id=" + sampleId + " actual=" + features.size()
-            );
-        }
-
-        for (int index = 0; index < features.size(); index++) {
-            JsonNode value = features.get(index);
-            if (value.isNull()) {
-                continue;
-            }
-            if (!value.isNumber()) {
-                throw new IllegalArgumentException(
-                    "feature value must be numeric or null: sample_id=" + sampleId + " index=" + index
-                );
-            }
-            double number = value.asDouble();
-            if (!Double.isFinite(number)) {
-                throw new IllegalArgumentException(
-                    "feature value must be finite: sample_id=" + sampleId + " index=" + index
-                );
-            }
-        }
-
-        try {
-            return MAPPER.writeValueAsString(features);
-        } catch (JsonProcessingException error) {
-            throw new IllegalArgumentException("features JSON serialization failed", error);
-        }
-    }
-
-    private static int computeMissingCount(JsonNode features) {
-        int missingCount = 0;
-        for (JsonNode value : features) {
-            if (value.isNull()) {
-                missingCount++;
-            }
-        }
-        return missingCount;
     }
 
     private static String requiredText(JsonNode node, String fieldName) {
@@ -179,6 +136,19 @@ final class PredictionLogParser {
         return value.asInt();
     }
 
+    private static long requiredPositiveLong(JsonNode node, String fieldName) {
+        JsonNode value = node.get(fieldName);
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()) {
+            throw new IllegalArgumentException("required long field missing or invalid: " + fieldName);
+        }
+
+        long number = value.asLong();
+        if (number < 1L) {
+            throw new IllegalArgumentException("long field must be >= 1: " + fieldName);
+        }
+        return number;
+    }
+
     private static double requiredProbability(JsonNode node, String fieldName) {
         double value = requiredNonNegativeNumber(node, fieldName);
         if (value > 1.0) {
@@ -200,11 +170,4 @@ final class PredictionLogParser {
         return number;
     }
 
-    private static JsonNode requiredArray(JsonNode node, String fieldName) {
-        JsonNode value = node.get(fieldName);
-        if (value == null || !value.isArray()) {
-            throw new IllegalArgumentException("required array field missing or invalid: " + fieldName);
-        }
-        return value;
-    }
 }

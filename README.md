@@ -9,7 +9,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 - Kafka topic을 feature patch, feature state update, label event, prediction event로 분리했습니다.
 - Kafka streams app과 archiver가 raw feature 저장, feature assembly, snapshot 저장, Valkey materialization을 담당합니다.
 - `serving-api`는 Valkey에서 최신 online feature snapshot을 읽고 `model-gateway`를 통해 model runtime을 호출합니다.
-- 예측 결과는 Kafka prediction event로 발행되고 `prediction-log-archiver`가 PostgreSQL `prediction_logs`에 저장합니다.
+- `/predict-by-id` 예측 결과는 Kafka prediction event로 발행되고 `prediction-log-archiver`가 PostgreSQL `prediction_logs`에 저장합니다.
 - Airflow DAG가 candidate 학습, gate 평가, canary 배포, traffic split, release promotion, rollback을 제어합니다.
 - Candidate 학습은 PostgreSQL evidence table에서 point-in-time feature를 on demand로 재구성하여 학습합니다.
 - Candidate Gate는 serving feature snapshot과 actual labels를 읽어서 champion과 비교합니다.
@@ -53,23 +53,28 @@ Workload scripts
 -> feature-assembler
 -> secom-feature-state-updates
 -> feature-materializer
--> Valkey online_feature_snapshot:{sample_id}
+   -> Valkey online_feature_snapshot:{sample_id}
+   -> PostgreSQL serving_feature_snapshots
 -> serving-api /predict-by-id
 -> model-gateway
 -> model-server-release / canary 
 ```
-- Prediction evidence는 serving API가 직접 DB에 쓰지 않고 Kafka event로 남깁니다.
+- `feature-materializer`는 Valkey `SET` 성공 후 동일한 snapshot을 PostgreSQL에 저장하고, 두 저장이 모두 끝난 뒤 Kafka offset을 commit합니다.
+- Snapshot의 `snapshot_time`은 assembler가 계산한 event time이고, `snapshot_version`은 sample별 state 변경 순서입니다. PostgreSQL의 `available_at`은 해당 version의 Valkey 쓰기가 성공한 뒤 기록되는 online availability time입니다.
+- Operational prediction evidence는 `/predict-by-id`가 사용한 `serving_snapshot_id`와 `snapshot_version`을 포함하며, serving API가 직접 DB에 쓰지 않고 Kafka event로 남깁니다.
+- `/predict`는 caller가 feature vector를 직접 전달하는 debug endpoint이므로 operational prediction evidence를 남기지 않습니다.
+- Prediction event와 `prediction_logs`에는 전체 feature vector를 중복 저장하지 않습니다. 세 drift feature consumer는 `serving_snapshot_id + sample_id + snapshot_version` logical triple로 `serving_feature_snapshots`를 join해 `serving_feature_snapshots.features_json`을 읽고, 작은 scalar인 `missing_count`는 prediction log에 유지합니다.
 - 현재 Shadow로 트래픽을 전송하여, Shadow로부터 오는 예측 결과를 클라이언트에게 응답하지 않고 평가에만 반영하는 것은 미구현 상태입니다. 
 
 
 ```text
-serving-api
+serving-api /predict-by-id
 -> secom-prediction-events
 -> prediction-log-archiver
 -> PostgreSQL prediction_logs
 ```
 
-- Feature와 label evidence는 별도 archiver가 PostgreSQL에 저장합니다.
+- Raw feature patch와 label evidence는 별도 archiver가 PostgreSQL에 저장하고, serving snapshot evidence는 `feature-materializer`가 저장합니다.
 
 ```text
 secom-feature-patches -> feature-raw-archiver -> PostgreSQL feature_events
@@ -105,6 +110,7 @@ PostgreSQL evidence tables
 
 현재 main Airflow training path는 `offline_feature_snapshots`를 source로 읽지 않습니다. 
 별도 utility로 `offline_feature_snapshots`를 저장할 수는 있지만, 실제 candidate 학습 DAG는 PostgreSQL evidence table에서 필요한 시점의 feature를 즉석으로 재구성합니다.
+`available_at` evidence가 추가됐지만 현재 trainer의 point time과 cutoff는 여전히 `serving_feature_snapshots.snapshot_time`을 사용합니다.
 
 주요 DAG:
 
@@ -135,14 +141,19 @@ prediction_logs + actual_labels
 -> quality-window-evaluator
 -> model_quality_windows
 
-prediction_logs.features_json
+prediction_logs
+  + serving_feature_snapshots
+    logical join = serving_snapshot_id + sample_id + snapshot_version
 -> drift-metrics-evaluator
 -> drift_metrics
 
 prediction_logs
+  + serving_feature_snapshots
+    logical join = serving_snapshot_id + sample_id + snapshot_version
 -> fixed-reference drift baseline / evaluator DAGs
 -> drift_reference_baselines / drift_reference_stats / drift_metrics
 ```
+- `evaluate_drift_metrics.py`, `create_drift_reference_baseline.py`, `evaluate_fixed_reference_drift_metrics.py`는 모두 위 logical triple join으로 serving snapshot의 feature vector를 읽습니다. `prediction_logs`는 feature vector 대신 실제 inference에 사용한 snapshot reference를 보관합니다.
 - Kafka 운영 지표는 Prometheus를 거쳐 Grafana로 들어갑니다.
 
 ## Runtime Services
@@ -171,7 +182,6 @@ Stream app과 daemon:
 ```text
 feature-raw-archiver
 feature-assembler
-feature-snapshot-archiver
 feature-materializer
 label-archiver
 prediction-log-archiver
@@ -206,6 +216,7 @@ secom-prediction-events
 ### Event evidence 중심 설계
 Feature patch, label, prediction을 event evidence로 남긴 뒤, monitoring과 candidate 학습이 이를 읽는 구조입니다. 
 Serving 결과를 재현하고, 특정 시점의 feature 상태를 다시 구성할 수 있습니다.
+Operational prediction evidence는 `/predict-by-id` 요청만을 대상으로 하며, 각 행의 `serving_snapshot_id`와 `snapshot_version`이 실제 사용한 serving snapshot을 가리킵니다. `/predict`는 debug 용도라 이 evidence 흐름에 포함되지 않습니다.
 
 ### Online store와 durable store 분리
 Valkey는 online serving에 필요한 최신 feature snapshot만 보관합니다. 
@@ -238,9 +249,8 @@ container/nginx/                       model-gateway config and admin API
 container/postgres/monitoring-schema.sql
                                       PostgreSQL monitoring schema
 feature-raw-archiver/                  Kafka -> feature_events
-feature-snapshot-archiver/             Kafka -> serving_feature_snapshots
 fdc-feature-assembler/                 feature patch aggregation
-fdc-feature-materializer/              Kafka -> Valkey online store
+fdc-feature-materializer/              Kafka -> Valkey + serving_feature_snapshots
 label-archiver/                        Kafka -> actual_labels
 prediction-log-archiver/               Kafka -> prediction_logs
 secom_mlops/serving/                   serving API and model runtime
@@ -252,4 +262,3 @@ scripts/workload/                      local workload generators
 
 ## 현재 범위
 이 프로젝트는 cloud production deployment가 아니라, 로컬에서 재현 가능한 포트폴리오용 MLOps platform입니다. 
-

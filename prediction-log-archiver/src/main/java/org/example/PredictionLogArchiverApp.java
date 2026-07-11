@@ -119,9 +119,11 @@ public final class PredictionLogArchiverApp {
             ));
 
             LOG.info(
-                "prediction_log_archived prediction_id={} sample_id={} model_run_id={} inserted={} topic={} partition={} offset={} committed_offset={}",
+                "prediction_log_archived prediction_id={} sample_id={} serving_snapshot_id={} snapshot_version={} model_run_id={} inserted={} topic={} partition={} offset={} committed_offset={}",
                 row.predictionId(),
                 row.sampleId(),
+                row.servingSnapshotId(),
+                row.snapshotVersion(),
                 row.modelRunId(),
                 inserted,
                 record.topic(),

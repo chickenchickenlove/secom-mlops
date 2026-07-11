@@ -67,6 +67,7 @@ class PredictByIdResponse(BaseModel):
     request_id: str
     sample_id: str
     serving_snapshot_id: str
+    snapshot_version: int
     snapshot_time: float
     feature_count: int
     missing_count: int
@@ -276,7 +277,6 @@ async def predict(payload: BatchPredictRequest, request: Request):
     request_id = str(uuid4())
     inputs = [row.features for row in payload.rows]
 
-    started_at = time.perf_counter()
     try:
         raw_predictions = await request.app.state.model_gateway_batcher.invoke_many(inputs)
         predictions = [
@@ -286,11 +286,7 @@ async def predict(payload: BatchPredictRequest, request: Request):
     except ModelGatewayError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    predicted_at = time.time()
-    latency_ms = (time.perf_counter() - started_at) * 1000
-
     response_predictions = []
-    prediction_events = []
 
     for row, prediction in zip(payload.rows, predictions):
         prediction_id = str(uuid4())
@@ -301,22 +297,6 @@ async def predict(payload: BatchPredictRequest, request: Request):
             "sample_id": row.sample_id,
             **prediction,
         })
-
-        prediction_events.append(_build_prediction_event(
-            prediction_id=prediction_id,
-            request_id=request_id,
-            sample_id=row.sample_id,
-            prediction=prediction,
-            predicted_at=predicted_at,
-            features=row.features,
-            missing_count=sum(value is None for value in row.features),
-            latency_ms=latency_ms,
-        ))
-
-    try:
-        await asyncio.to_thread(request.app.state.prediction_event_producer.publish_many, prediction_events)
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
 
     return {
         "request_id": request_id,
@@ -366,13 +346,14 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
     try:
         await asyncio.to_thread(
             request.app.state.prediction_event_producer.publish_many,
-            [_build_prediction_event(
+            [_build_snapshot_prediction_event(
                 prediction_id=prediction_id,
                 request_id=request_id,
                 sample_id=snapshot.sample_id,
+                serving_snapshot_id=snapshot.serving_snapshot_id,
+                snapshot_version=snapshot.snapshot_version,
                 prediction=prediction,
                 predicted_at=predicted_at,
-                features=snapshot.values,
                 missing_count=snapshot.missing_count,
                 latency_ms=latency_ms,
             )],
@@ -385,6 +366,7 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
         "request_id": request_id,
         "sample_id": snapshot.sample_id,
         "serving_snapshot_id": snapshot.serving_snapshot_id,
+        "snapshot_version": snapshot.snapshot_version,
         "snapshot_time": snapshot.snapshot_time,
         "feature_count": snapshot.feature_count,
         "missing_count": snapshot.missing_count,
@@ -452,13 +434,14 @@ def _normalize_prediction(raw: dict[str, Any], row_index: int) -> dict[str, Any]
         raise ModelGatewayError(f"invalid model gateway prediction: {error}") from error
 
 
-def _build_prediction_event(
+def _build_snapshot_prediction_event(
         prediction_id: str,
         request_id: str,
         sample_id: str,
+        serving_snapshot_id: str,
+        snapshot_version: int,
         prediction: dict[str, Any],
         predicted_at: float,
-        features: list[float | None],
         missing_count: int,
         latency_ms: float,
 ) -> dict[str, Any]:
@@ -466,6 +449,8 @@ def _build_prediction_event(
         "prediction_id": prediction_id,
         "request_id": request_id,
         "sample_id": sample_id,
+        "serving_snapshot_id": serving_snapshot_id,
+        "snapshot_version": snapshot_version,
         "model_run_id": prediction["model_run_id"],
         "model_name": prediction.get("model_name"),
         "model_version": prediction.get("model_version"),
@@ -477,7 +462,6 @@ def _build_prediction_event(
         "predicted_value": prediction["prediction"],
         "predicted_label": prediction["label"],
         "threshold": prediction["threshold"],
-        "features": features,
         "missing_count": missing_count,
         "latency_ms": latency_ms,
     }

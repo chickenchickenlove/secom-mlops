@@ -4,6 +4,8 @@ record PredictionLogRow(
     String predictionId,
     String requestId,
     String sampleId,
+    String servingSnapshotId,
+    long snapshotVersion,
     String modelRunId,
     String modelName,
     String modelVersion,
@@ -15,7 +17,6 @@ record PredictionLogRow(
     int predictedValue,
     String predictedLabel,
     double threshold,
-    String featuresJson,
     int missingCount,
     double latencyMs
 ) {

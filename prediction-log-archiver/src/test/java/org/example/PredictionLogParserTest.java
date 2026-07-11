@@ -1,11 +1,7 @@
 package org.example;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.node.TextNode;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -16,23 +12,20 @@ class PredictionLogParserTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    void parsesValidPredictionLog() throws Exception {
+    void parsesValidPredictionLogWithoutFeatures() {
         PredictionLogRow row = PredictionLogParser.parse(validEvent().toString(), "secom-0000001");
 
         assertEquals("pred-001", row.predictionId());
         assertEquals("req-001", row.requestId());
         assertEquals("secom-0000001", row.sampleId());
+        assertEquals("state:secom-0000001:1000:3", row.servingSnapshotId());
+        assertEquals(3L, row.snapshotVersion());
         assertEquals("run-001", row.modelRunId());
         assertEquals("champion", row.modelAlias());
         assertEquals("online", row.runtimeSlot());
         assertEquals(-1, row.predictedValue());
         assertEquals("pass", row.predictedLabel());
-        assertEquals(0, row.missingCount());
-
-        JsonNode features = MAPPER.readTree(row.featuresJson());
-        assertEquals(590, features.size());
-        assertEquals(0.0, features.get(0).asDouble());
-        assertEquals(589.0, features.get(589).asDouble());
+        assertEquals(44, row.missingCount());
     }
 
     @Test
@@ -91,9 +84,9 @@ class PredictionLogParserTest {
     }
 
     @Test
-    void rejectsMissingCountMismatch() {
+    void rejectsNegativeMissingCount() {
         ObjectNode event = validEvent();
-        ((ArrayNode) event.get("features")).set(10, NullNode.getInstance());
+        event.put("missing_count", -1);
 
         IllegalArgumentException error = assertThrows(
             IllegalArgumentException.class,
@@ -101,15 +94,15 @@ class PredictionLogParserTest {
         );
 
         assertEquals(
-            "missing_count mismatch: sample_id=secom-0000001 missing_count=0 computed_missing_count=1",
+            "missing_count must be between 0 and 590: sample_id=secom-0000001 missing_count=-1",
             error.getMessage()
         );
     }
 
     @Test
-    void rejectsNonNumericFeatureValue() {
+    void rejectsMissingCountAboveFeatureCount() {
         ObjectNode event = validEvent();
-        ((ArrayNode) event.get("features")).set(10, TextNode.valueOf("bad"));
+        event.put("missing_count", 591);
 
         IllegalArgumentException error = assertThrows(
             IllegalArgumentException.class,
@@ -117,9 +110,64 @@ class PredictionLogParserTest {
         );
 
         assertEquals(
-            "feature value must be numeric or null: sample_id=secom-0000001 index=10",
+            "missing_count must be between 0 and 590: sample_id=secom-0000001 missing_count=591",
             error.getMessage()
         );
+    }
+
+    @Test
+    void rejectsBlankServingSnapshotId() {
+        ObjectNode event = validEvent();
+        event.put("serving_snapshot_id", " ");
+
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> PredictionLogParser.parse(event.toString(), null)
+        );
+
+        assertEquals(
+            "required text field missing or invalid: serving_snapshot_id",
+            error.getMessage()
+        );
+    }
+
+    @Test
+    void rejectsNonIntegralSnapshotVersion() {
+        ObjectNode event = validEvent();
+        event.put("snapshot_version", 3.5);
+
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> PredictionLogParser.parse(event.toString(), null)
+        );
+
+        assertEquals(
+            "required long field missing or invalid: snapshot_version",
+            error.getMessage()
+        );
+    }
+
+    @Test
+    void rejectsNonPositiveSnapshotVersion() {
+        ObjectNode event = validEvent();
+        event.put("snapshot_version", 0);
+
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> PredictionLogParser.parse(event.toString(), null)
+        );
+
+        assertEquals("long field must be >= 1: snapshot_version", error.getMessage());
+    }
+
+    @Test
+    void acceptsSnapshotVersionLargerThanIntegerRange() {
+        ObjectNode event = validEvent();
+        event.put("snapshot_version", 3_000_000_000L);
+
+        PredictionLogRow row = PredictionLogParser.parse(event.toString(), null);
+
+        assertEquals(3_000_000_000L, row.snapshotVersion());
     }
 
     @Test
@@ -140,6 +188,8 @@ class PredictionLogParserTest {
         event.put("prediction_id", "pred-001");
         event.put("request_id", "req-001");
         event.put("sample_id", "secom-0000001");
+        event.put("serving_snapshot_id", "state:secom-0000001:1000:3");
+        event.put("snapshot_version", 3L);
         event.put("model_run_id", "run-001");
         event.put("model_name", "secom-xgb");
         event.put("model_version", "1");
@@ -151,13 +201,8 @@ class PredictionLogParserTest {
         event.put("predicted_value", -1);
         event.put("predicted_label", "pass");
         event.put("threshold", 0.5);
-        event.put("missing_count", 0);
+        event.put("missing_count", 44);
         event.put("latency_ms", 12.3);
-
-        ArrayNode features = event.putArray("features");
-        for (int index = 0; index < 590; index++) {
-            features.add((double) index);
-        }
 
         return event;
     }

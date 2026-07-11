@@ -1,7 +1,8 @@
-package org.example;
+package org.example.snapshot;
 
-record ServingSnapshotRow(
+public record ServingSnapshotRow(
     String servingSnapshotId,
+    long snapshotVersion,
     String sampleId,
     double snapshotTime,
     double windowStart,
@@ -12,7 +13,6 @@ record ServingSnapshotRow(
     boolean isComplete,
     String featuresJson,
     String simulationRunId,
-    String driftSegment,
-    double createdAt
+    String driftSegment
 ) {
 }
