@@ -48,6 +48,11 @@ class FeatureStateProcessorTest {
             assertEquals(589, snapshot.get("missing_count").asInt());
             assertFalse(snapshot.get("is_complete").asBoolean());
             assertEquals(1, snapshot.get("source_event_count").asInt());
+            assertEquals(1, snapshot.get("snapshot_version").asInt());
+            assertEquals(
+                snapshot.get("source_event_count").asInt(),
+                snapshot.get("snapshot_version").asInt()
+            );
             assertEquals(10.0, snapshot.get("window_start").asDouble());
             assertEquals(10.0, snapshot.get("window_end").asDouble());
             assertEquals("early", snapshot.get("last_feature_group").asText());
@@ -65,7 +70,15 @@ class FeatureStateProcessorTest {
             TestOutputTopic<String, String> output = outputTopic(driver);
 
             input.pipeInput("secom-0000001", featurePatch("secom-0000001", 10.0, "\"f000\": 1.2"));
-            output.readKeyValue();
+            JsonNode firstSnapshot = MAPPER.readTree(output.readValue());
+
+            assertEquals(10.0, firstSnapshot.get("snapshot_time").asDouble());
+            assertEquals(1, firstSnapshot.get("source_event_count").asInt());
+            assertEquals(1, firstSnapshot.get("snapshot_version").asInt());
+            assertEquals(
+                firstSnapshot.get("source_event_count").asInt(),
+                firstSnapshot.get("snapshot_version").asInt()
+            );
 
             input.pipeInput("secom-0000001", featurePatch("secom-0000001", 8.0, "\"f001\": 2.3"));
 
@@ -77,6 +90,13 @@ class FeatureStateProcessorTest {
             assertEquals(2, snapshot.get("feature_count").asInt());
             assertEquals(588, snapshot.get("missing_count").asInt());
             assertEquals(2, snapshot.get("source_event_count").asInt());
+            assertEquals(2, snapshot.get("snapshot_version").asInt());
+            assertEquals(
+                snapshot.get("source_event_count").asInt(),
+                snapshot.get("snapshot_version").asInt()
+            );
+            assertTrue(snapshot.get("snapshot_version").asInt() > firstSnapshot.get("snapshot_version").asInt());
+            assertEquals(10.0, snapshot.get("snapshot_time").asDouble());
             assertEquals(8.0, snapshot.get("window_start").asDouble());
             assertEquals(10.0, snapshot.get("window_end").asDouble());
             assertEquals("state:secom-0000001:10000:2", snapshot.get("serving_snapshot_id").asText());

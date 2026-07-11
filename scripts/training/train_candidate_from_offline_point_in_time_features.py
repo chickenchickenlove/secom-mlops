@@ -164,12 +164,12 @@ def load_labeled_point_in_time_features(
         s.features_json,
         s.simulation_run_id,
         s.drift_segment,
-        s.created_at,
+        s.snapshot_version,
         ROW_NUMBER() OVER (
           PARTITION BY s.sample_id
           ORDER BY
             s.snapshot_time DESC,
-            s.created_at DESC,
+            s.snapshot_version DESC,
             s.serving_snapshot_id DESC
         ) AS rn
       FROM serving_feature_snapshots s

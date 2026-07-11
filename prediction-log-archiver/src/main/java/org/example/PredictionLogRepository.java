@@ -10,6 +10,8 @@ final class PredictionLogRepository {
               prediction_id,
               request_id,
               sample_id,
+              serving_snapshot_id,
+              snapshot_version,
               model_run_id,
               model_name,
               model_version,
@@ -21,11 +23,10 @@ final class PredictionLogRepository {
               predicted_value,
               predicted_label,
               threshold,
-              features_json,
               missing_count,
               latency_ms
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (prediction_id) DO NOTHING
           """;
 
@@ -34,20 +35,21 @@ final class PredictionLogRepository {
             statement.setString(1, row.predictionId());
             statement.setString(2, row.requestId());
             statement.setString(3, row.sampleId());
-            statement.setString(4, row.modelRunId());
-            statement.setString(5, row.modelName());
-            statement.setString(6, row.modelVersion());
-            statement.setString(7, row.modelAlias());
-            statement.setString(8, row.modelUri());
-            statement.setString(9, row.runtimeSlot());
-            statement.setDouble(10, row.predictedAt());
-            statement.setDouble(11, row.failProbability());
-            statement.setInt(12, row.predictedValue());
-            statement.setString(13, row.predictedLabel());
-            statement.setDouble(14, row.threshold());
-            statement.setString(15, row.featuresJson());
-            statement.setInt(16, row.missingCount());
-            statement.setDouble(17, row.latencyMs());
+            statement.setString(4, row.servingSnapshotId());
+            statement.setLong(5, row.snapshotVersion());
+            statement.setString(6, row.modelRunId());
+            statement.setString(7, row.modelName());
+            statement.setString(8, row.modelVersion());
+            statement.setString(9, row.modelAlias());
+            statement.setString(10, row.modelUri());
+            statement.setString(11, row.runtimeSlot());
+            statement.setDouble(12, row.predictedAt());
+            statement.setDouble(13, row.failProbability());
+            statement.setInt(14, row.predictedValue());
+            statement.setString(15, row.predictedLabel());
+            statement.setDouble(16, row.threshold());
+            statement.setInt(17, row.missingCount());
+            statement.setDouble(18, row.latencyMs());
             return statement.executeUpdate();
         }
     }

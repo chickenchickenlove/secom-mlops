@@ -23,8 +23,7 @@ public final class FeatureAssemblerApp {
     }
 
     public static void main(String[] args) {
-        AppConfig config = AppConfig.fromEnv();
-
+        final AppConfig config = AppConfig.fromEnv();
         final Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, config.applicationId());
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
@@ -76,7 +75,7 @@ public final class FeatureAssemblerApp {
             Serdes.String()
         );
 
-        Topology topology = new Topology();
+        final Topology topology = new Topology();
 
         topology.addSource(
             "feature-patch-source",

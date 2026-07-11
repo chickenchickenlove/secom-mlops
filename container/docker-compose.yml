@@ -250,27 +250,6 @@
         MONITORING_DB_PASSWORD: mlops
       restart: unless-stopped
 
-    feature-snapshot-archiver:
-      build:
-        context: ../feature-snapshot-archiver
-      depends_on:
-        kafka:
-          condition: service_healthy
-        kafka-init:
-          condition: service_completed_successfully
-        postgres:
-          condition: service_healthy
-      environment:
-        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-        FEATURE_STATE_UPDATES_TOPIC: secom-feature-state-updates
-        KAFKA_GROUP_ID: secom-feature-snapshot-archiver
-        KAFKA_CLIENT_ID: secom-feature-snapshot-archiver
-        KAFKA_AUTO_OFFSET_RESET: latest
-        MONITORING_JDBC_URL: jdbc:postgresql://postgres:5432/monitoring
-        MONITORING_DB_USER: mlops
-        MONITORING_DB_PASSWORD: mlops
-      restart: unless-stopped
-
     feature-assembler:
       build:
         context: ../fdc-feature-assembler
@@ -296,6 +275,8 @@
           condition: service_healthy
         kafka-init:
           condition: service_completed_successfully
+        postgres:
+          condition: service_healthy
         valkey:
           condition: service_healthy
       environment:
@@ -304,6 +285,9 @@
         KAFKA_GROUP_ID: secom-feature-state-materializer
         KAFKA_CLIENT_ID: secom-feature-state-materializer
         KAFKA_AUTO_OFFSET_RESET: latest
+        MONITORING_JDBC_URL: jdbc:postgresql://postgres:5432/monitoring
+        MONITORING_DB_USER: mlops
+        MONITORING_DB_PASSWORD: mlops
         VALKEY_HOST: valkey
         VALKEY_PORT: "6379"
         VALKEY_VERIFY_WRITE: "true"

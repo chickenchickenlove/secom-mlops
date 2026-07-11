@@ -103,7 +103,7 @@ def load_labeled_serving_snapshots(args: argparse.Namespace) -> tuple[
         s.*,
         ROW_NUMBER() OVER (
           PARTITION BY s.sample_id
-          ORDER BY s.snapshot_time DESC, s.created_at DESC, s.serving_snapshot_id DESC
+          ORDER BY s.snapshot_time DESC, s.snapshot_version DESC, s.serving_snapshot_id DESC
         ) AS rn
       FROM serving_feature_snapshots s
       WHERE s.is_complete = TRUE

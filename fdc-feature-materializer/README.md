@@ -1,7 +1,19 @@
 # fdc-feature-materializer
 
-Consumes feature state updates from Kafka and writes the latest snapshot for each
-sample into Valkey.
+Consumes feature state updates from Kafka and materializes each validated snapshot
+into both online and durable stores. For every record, it writes the latest snapshot
+for the sample to Valkey, archives the same snapshot in PostgreSQL
+`serving_feature_snapshots` after the Valkey `SET` succeeds, and then commits the
+Kafka offset.
+
+If the PostgreSQL write fails, the Kafka offset is not committed. The record can
+therefore be replayed instead of leaving an unarchived snapshot as successfully
+consumed evidence.
+
+Each snapshot carries a sample-local `snapshot_version` assigned by the assembler.
+After the Valkey write succeeds, the materializer records `available_at` in
+PostgreSQL as the time that version was confirmed available online. Reprocessing the
+same snapshot id does not replace its first recorded `available_at`.
 
 This service is configured with environment variables. CLI arguments are not
 supported.
@@ -16,6 +28,9 @@ supported.
 | `KAFKA_CLIENT_ID` | `secom-feature-state-materializer` | Kafka client id |
 | `VALKEY_HOST` | `valkey` | Valkey host |
 | `VALKEY_PORT` | `6379` | Valkey port |
+| `MONITORING_JDBC_URL` | `jdbc:postgresql://postgres:5432/monitoring` | PostgreSQL JDBC URL |
+| `MONITORING_DB_USER` | `mlops` | PostgreSQL user |
+| `MONITORING_DB_PASSWORD` | `mlops` | PostgreSQL password |
 
 ## Optional Environment Variables
 

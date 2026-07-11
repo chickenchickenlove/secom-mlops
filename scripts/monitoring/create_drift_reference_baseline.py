@@ -30,25 +30,29 @@ POSITIVE_CLASS = 1
 
 FETCH_SQL = """
 SELECT
-  prediction_id,
-  sample_id,
-  model_name,
-  model_version,
-  model_alias,
-  model_run_id,
-  threshold,
-  predicted_at,
-  fail_probability,
-  predicted_value,
-  predicted_label,
-  features_json,
-  missing_count
-FROM prediction_logs
-WHERE model_run_id = %s
-  AND threshold = %s
-  AND predicted_at > %s
-  AND predicted_at <= %s
-ORDER BY predicted_at, prediction_id;
+  p.prediction_id,
+  p.sample_id,
+  p.model_name,
+  p.model_version,
+  p.model_alias,
+  p.model_run_id,
+  p.threshold,
+  p.predicted_at,
+  p.fail_probability,
+  p.predicted_value,
+  p.predicted_label,
+  s.features_json AS features_json,
+  p.missing_count
+FROM prediction_logs p
+JOIN serving_feature_snapshots s
+  ON s.serving_snapshot_id = p.serving_snapshot_id
+ AND s.sample_id = p.sample_id
+ AND s.snapshot_version = p.snapshot_version
+WHERE p.model_run_id = %s
+  AND p.threshold = %s
+  AND p.predicted_at > %s
+  AND p.predicted_at <= %s
+ORDER BY p.predicted_at, p.prediction_id;
 """
 
 INSERT_BASELINE_SQL = """

@@ -2,6 +2,8 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
   prediction_id TEXT PRIMARY KEY,
   request_id TEXT NOT NULL,
   sample_id TEXT NOT NULL,
+  serving_snapshot_id TEXT NOT NULL,
+  snapshot_version BIGINT NOT NULL,
   model_run_id TEXT NOT NULL,
   model_name TEXT,
   model_version TEXT,
@@ -13,7 +15,6 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
   predicted_value INTEGER NOT NULL,
   predicted_label TEXT NOT NULL,
   threshold DOUBLE PRECISION NOT NULL,
-  features_json JSONB NOT NULL,
   missing_count INTEGER NOT NULL,
   latency_ms DOUBLE PRECISION NOT NULL,
   CONSTRAINT chk_prediction_fail_probability
@@ -24,6 +25,8 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
     CHECK (predicted_label IN ('pass', 'fail')),
   CONSTRAINT chk_prediction_threshold
     CHECK (threshold >= 0.0 AND threshold <= 1.0),
+  CONSTRAINT chk_prediction_snapshot_version
+    CHECK (snapshot_version > 0),
   CONSTRAINT chk_prediction_missing_count
     CHECK (missing_count >= 0 AND missing_count <= 590)
 );
@@ -33,6 +36,9 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
 
   CREATE INDEX IF NOT EXISTS idx_prediction_logs_sample_id
     ON prediction_logs (sample_id);
+
+  CREATE INDEX IF NOT EXISTS idx_prediction_logs_serving_snapshot
+    ON prediction_logs (serving_snapshot_id, sample_id, snapshot_version);
 
   CREATE TABLE IF NOT EXISTS actual_labels (
     sample_id TEXT PRIMARY KEY,
@@ -135,6 +141,7 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
   CREATE TABLE IF NOT EXISTS serving_feature_snapshots (
     serving_snapshot_id TEXT PRIMARY KEY,
     sample_id TEXT NOT NULL,
+    snapshot_version BIGINT NOT NULL,
     snapshot_time DOUBLE PRECISION NOT NULL,
     window_start DOUBLE PRECISION NOT NULL,
     window_end DOUBLE PRECISION NOT NULL,
@@ -145,13 +152,21 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
     features_json JSONB NOT NULL,
     simulation_run_id TEXT,
     drift_segment TEXT,
-    created_at DOUBLE PRECISION NOT NULL,
+    available_at DOUBLE PRECISION NOT NULL,
+
+    -- (sample, snapshot_version) 묶음은 유일해야 함.
+    CONSTRAINT uq_serving_feature_snapshots_sample_version
+      UNIQUE (sample_id, snapshot_version),
+    CONSTRAINT chk_serving_feature_snapshots_version
+      CHECK (snapshot_version > 0),
     CONSTRAINT chk_serving_feature_snapshots_time
       CHECK (
         snapshot_time >= 0.0
         AND window_start >= 0.0
         AND window_end >= window_start
       ),
+    CONSTRAINT chk_serving_feature_snapshots_available_at
+      CHECK (available_at >= 0.0),
     CONSTRAINT chk_serving_feature_snapshots_status
       CHECK (snapshot_status IN ('partial', 'timed_out', 'complete', 'late_update')),
     CONSTRAINT chk_serving_feature_snapshots_counts
@@ -175,6 +190,9 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
 
   CREATE INDEX IF NOT EXISTS idx_serving_feature_snapshots_sample_time
     ON serving_feature_snapshots (sample_id, snapshot_time DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_serving_feature_snapshots_sample_available
+    ON serving_feature_snapshots (sample_id, available_at DESC, snapshot_version DESC);
 
   CREATE INDEX IF NOT EXISTS idx_serving_feature_snapshots_run_time
     ON serving_feature_snapshots (simulation_run_id, snapshot_time);

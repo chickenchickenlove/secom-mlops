@@ -29,12 +29,33 @@ POSITIVE_CLASS = 1
 logger = get_logger(__name__)
 
 FETCH_SQL = """
-WITH anchors AS (
+WITH resolved_predictions AS NOT MATERIALIZED (
+  SELECT
+    p.prediction_id,
+    p.sample_id,
+    p.model_name,
+    p.model_version,
+    p.model_alias,
+    p.model_run_id,
+    p.threshold,
+    p.predicted_at,
+    p.fail_probability,
+    p.predicted_value,
+    p.predicted_label,
+    s.features_json AS features_json,
+    p.missing_count
+  FROM prediction_logs p
+  JOIN serving_feature_snapshots s
+    ON s.serving_snapshot_id = p.serving_snapshot_id
+   AND s.sample_id = p.sample_id
+   AND s.snapshot_version = p.snapshot_version
+),
+anchors AS (
   SELECT
     model_run_id,
     threshold,
     MAX(predicted_at) AS current_end
-  FROM prediction_logs
+  FROM resolved_predictions
   {anchor_where}
   GROUP BY model_run_id, threshold
 )
@@ -53,7 +74,7 @@ SELECT
   p.features_json,
   p.missing_count,
   a.current_end
-FROM prediction_logs p
+FROM resolved_predictions p
 JOIN anchors a
   ON a.model_run_id = p.model_run_id
  AND a.threshold = p.threshold

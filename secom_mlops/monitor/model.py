@@ -11,6 +11,8 @@ class PredictionLog(BaseModel):
     prediction_id: UUID
     request_id: UUID
     sample_id: str = Field(..., pattern=r"^secom-\d{7}$")
+    serving_snapshot_id: str = Field(min_length=1, pattern=r"^\S+$")
+    snapshot_version: int = Field(ge=1)
     model_run_id: str
     runtime_slot: str | None = None
     predicted_at: float = Field(ge=0) # unix time
@@ -20,7 +22,6 @@ class PredictionLog(BaseModel):
     predicted_label: Literal["pass", "fail"]
     threshold: float = Field(ge=0.0, le=1.0)
 
-    features: list[float | None] = Field(min_length=NUM_FEATURES, max_length=NUM_FEATURES)
     missing_count: int = Field(ge=0, le=NUM_FEATURES)
     latency_ms: float | None = None
 

@@ -15,7 +15,10 @@ public record MaterializerConfig(
     int valkeyPoolMaxTotal,
     int valkeyPoolMaxIdle,
     String keyPrefix,
-    boolean verifyWrite
+    boolean verifyWrite,
+    String dbUrl,
+    String dbUser,
+    String dbPassword
 ) {
     public static MaterializerConfig fromEnv() {
         return new MaterializerConfig(
@@ -33,7 +36,10 @@ public record MaterializerConfig(
             optionalIntEnv("VALKEY_POOL_MAX_TOTAL", 8),
             optionalIntEnv("VALKEY_POOL_MAX_IDLE", 8),
             optionalEnv("VALKEY_KEY_PREFIX", "online_feature_snapshot"),
-            optionalBooleanEnv("VALKEY_VERIFY_WRITE", true)
+            optionalBooleanEnv("VALKEY_VERIFY_WRITE", true),
+            requiredEnv("MONITORING_JDBC_URL"),
+            requiredEnv("MONITORING_DB_USER"),
+            requiredEnv("MONITORING_DB_PASSWORD")
         );
     }
 
