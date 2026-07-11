@@ -35,6 +35,26 @@ class PublishStats:
     failed: int = 0
 
 
+@dataclass(frozen=True)
+class FeatureOffsetAction:
+    feature_index: int
+    direction: str
+    offset: float
+    frequency: int
+
+    @property
+    def delta(self) -> float:
+        if self.direction == "+":
+            return self.offset
+        return -self.offset
+
+    @property
+    def direction_name(self) -> str:
+        if self.direction == "+":
+            return "up"
+        return "down"
+
+
 def load_state(path: Path) -> dict:
     if not path.exists():
         return {
@@ -118,6 +138,37 @@ def apply_feature_offset(
     ]
 
 
+def normalize_feature_offset_actions(raw_actions: Any) -> list[FeatureOffsetAction]:
+    if raw_actions is None:
+        return []
+    if isinstance(raw_actions, FeatureOffsetAction):
+        return [raw_actions]
+    return list(raw_actions)
+
+
+def apply_feature_offset_actions(
+        row: list[float | None],
+        actions: list[FeatureOffsetAction],
+        trial_number: int,
+) -> list[float | None]:
+    updated_row = row
+
+    for action in actions:
+        if trial_number % action.frequency != 0:
+            continue
+
+        value = updated_row[action.feature_index]
+        if value is None:
+            continue
+
+        if updated_row is row:
+            updated_row = list(row)
+
+        updated_row[action.feature_index] = value + action.delta
+
+    return updated_row
+
+
 def build_feature_patch(row: list[float | None], indices: range) -> dict[str, float | None]:
     return {
         FEATURE_KEYS[idx]: row[idx]
@@ -125,19 +176,41 @@ def build_feature_patch(row: list[float | None], indices: range) -> dict[str, fl
     }
 
 
+def format_float_for_name(value: float) -> str:
+    return f"{value:.6f}".rstrip("0").rstrip(".").replace(".", "_")
+
+
 def format_ratio_for_name(ratio: float) -> str:
-    return f"{ratio:.6f}".rstrip("0").rstrip(".").replace(".", "_")
+    return format_float_for_name(ratio)
+
+
+def format_feature_offset_action_for_name(action: FeatureOffsetAction) -> str:
+    offset_name = format_float_for_name(action.offset)
+    return (
+        f"feature_offset_action_"
+        f"f{action.feature_index:03d}_"
+        f"{action.direction_name}_"
+        f"{offset_name}_"
+        f"every_{action.frequency}"
+    )
 
 
 def resolve_drift_segment(args: argparse.Namespace) -> str:
     if args.drift_segment is not None:
         return args.drift_segment
 
-    if args.feature_offset_direction == "none":
+    segment_parts = []
+    if args.feature_offset_direction != "none":
+        ratio_name = format_ratio_for_name(args.feature_offset_ratio)
+        segment_parts.append(f"feature_offset_{args.feature_offset_direction}_{ratio_name}")
+
+    for action in normalize_feature_offset_actions(args.feature_offset_action):
+        segment_parts.append(format_feature_offset_action_for_name(action))
+
+    if not segment_parts:
         return DEFAULT_DRIFT_SEGMENT
 
-    ratio_name = format_ratio_for_name(args.feature_offset_ratio)
-    return f"feature_offset_{args.feature_offset_direction}_{ratio_name}"
+    return "_".join(segment_parts)
 
 
 def build_feature_events(
@@ -146,11 +219,13 @@ def build_feature_events(
         start_index: int,
         batch_size: int,
         simulation_run_id: str,
+        action_start_index: int = 0,
 ) -> list[dict[str, Any]]:
     drift_segment = resolve_drift_segment(args)
     created_at = time.time()
     event_time = created_at
     groups = selected_feature_groups(args.feature_group)
+    offset_actions = normalize_feature_offset_actions(args.feature_offset_action)
     events = []
 
     for item_index in range(batch_size):
@@ -161,6 +236,11 @@ def build_feature_events(
             rows[source_row_index],
             args.feature_offset_direction,
             args.feature_offset_ratio,
+        )
+        row = apply_feature_offset_actions(
+            row,
+            offset_actions,
+            action_start_index + item_index + 1,
         )
 
         for feature_group, indices in groups.items():
@@ -264,6 +344,79 @@ def summarize(events: list[dict[str, Any]]) -> None:
         )
 
 
+def parse_feature_index(raw_value: str) -> int:
+    value = raw_value.strip()
+    if value.startswith("feature_"):
+        value = value.removeprefix("feature_")
+    elif value.startswith("f") and len(value) > 1:
+        value = value[1:]
+
+    try:
+        feature_index = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"feature index must be an integer, fNNN, or feature_NNN: {raw_value}"
+        ) from error
+
+    if feature_index < 0 or feature_index >= NUM_FEATURES:
+        raise argparse.ArgumentTypeError(
+            f"feature index must be between 0 and {NUM_FEATURES - 1}: {raw_value}"
+        )
+
+    return feature_index
+
+
+def parse_feature_offset_direction(raw_value: str) -> str:
+    value = raw_value.strip().lower()
+    if value in {"+", "positive", "up"}:
+        return "+"
+    if value in {"-", "negative", "down"}:
+        return "-"
+
+    raise argparse.ArgumentTypeError(
+        f"feature offset direction must be one of +, -, positive, negative, up, down: {raw_value}"
+    )
+
+
+def parse_feature_offset_action(raw_value: str) -> FeatureOffsetAction:
+    parts = [part.strip() for part in raw_value.split(",")]
+    if len(parts) != 4 or any(part == "" for part in parts):
+        raise argparse.ArgumentTypeError(
+            "feature-offset-action must use FEATURE,SIGN,OFFSET,FREQUENCY, "
+            "for example: 480,+,5.9,2"
+        )
+
+    feature_index = parse_feature_index(parts[0])
+    direction = parse_feature_offset_direction(parts[1])
+
+    try:
+        offset = float(parts[2])
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"feature offset must be a number: {parts[2]}"
+        ) from error
+
+    if not math.isfinite(offset) or offset <= 0:
+        raise argparse.ArgumentTypeError("feature offset must be a finite number > 0")
+
+    try:
+        frequency = int(parts[3])
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"feature offset frequency must be an integer: {parts[3]}"
+        ) from error
+
+    if frequency < 1:
+        raise argparse.ArgumentTypeError("feature offset frequency must be >= 1")
+
+    return FeatureOffsetAction(
+        feature_index=feature_index,
+        direction=direction,
+        offset=offset,
+        frequency=frequency,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-path", default=None)
@@ -281,13 +434,26 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--feature-offset-action",
+        type=parse_feature_offset_action,
+        action="append",
+        default=None,
+        metavar="FEATURE,SIGN,OFFSET,FREQUENCY",
+        help=(
+            "Apply an absolute offset to one feature every N samples, e.g. 480,+,5.9,2. "
+            "May be specified multiple times."
+        ),
+    )
+    parser.add_argument(
         "--feature-offset-direction",
         choices=["none", "up", "down"],
         default="none",
     )
     parser.add_argument("--feature-offset-ratio", type=float, default=0.0)
     parser.add_argument("--drift-segment", default=None)
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.feature_offset_action = normalize_feature_offset_actions(args.feature_offset_action)
+    return args
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -338,6 +504,7 @@ def main() -> None:
             start_index=start_index,
             batch_size=batch_size,
             simulation_run_id=simulation_run_id,
+            action_start_index=total_sent,
         )
 
         summarize(events)
