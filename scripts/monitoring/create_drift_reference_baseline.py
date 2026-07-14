@@ -48,6 +48,7 @@ JOIN serving_feature_snapshots s
   ON s.serving_snapshot_id = p.serving_snapshot_id
  AND s.sample_id = p.sample_id
  AND s.snapshot_version = p.snapshot_version
+ AND s.feature_hash = p.feature_hash
 WHERE p.model_run_id = %s
   AND p.threshold = %s
   AND p.predicted_at > %s

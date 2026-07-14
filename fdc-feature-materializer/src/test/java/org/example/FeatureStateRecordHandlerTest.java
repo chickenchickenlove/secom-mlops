@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class FeatureStateRecordHandlerTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String FEATURE_HASH = "sha256:v1:" + "0".repeat(64);
 
     @Test
     void writesValkeyThenDatabaseThenCommitsKafkaOffset() {
@@ -36,6 +37,7 @@ class FeatureStateRecordHandlerTest {
         assertEquals("online_feature_snapshot:secom-0000001", store.lastKey);
         assertEquals("state:secom-0000001:1000:3", sink.lastRow.servingSnapshotId());
         assertEquals(3L, sink.lastRow.snapshotVersion());
+        assertEquals(FEATURE_HASH, sink.lastRow.featureHash());
         assertEquals(123.456, sink.lastAvailableAt);
     }
 
@@ -129,6 +131,7 @@ class FeatureStateRecordHandlerTest {
         snapshot.put("sample_id", "secom-0000001");
         snapshot.put("source_event_count", 3);
         snapshot.put("snapshot_version", 3);
+        snapshot.put("feature_hash", FEATURE_HASH);
         snapshot.put("snapshot_time", 1.0);
         snapshot.put("window_start", 0.5);
         snapshot.put("window_end", 1.0);

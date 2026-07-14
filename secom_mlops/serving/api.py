@@ -68,6 +68,7 @@ class PredictByIdResponse(BaseModel):
     sample_id: str
     serving_snapshot_id: str
     snapshot_version: int
+    feature_hash: str = Field(pattern=r"^sha256:v1:[0-9a-f]{64}$")
     snapshot_time: float
     feature_count: int
     missing_count: int
@@ -352,6 +353,7 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
                 sample_id=snapshot.sample_id,
                 serving_snapshot_id=snapshot.serving_snapshot_id,
                 snapshot_version=snapshot.snapshot_version,
+                feature_hash=snapshot.feature_hash,
                 prediction=prediction,
                 predicted_at=predicted_at,
                 missing_count=snapshot.missing_count,
@@ -367,6 +369,7 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
         "sample_id": snapshot.sample_id,
         "serving_snapshot_id": snapshot.serving_snapshot_id,
         "snapshot_version": snapshot.snapshot_version,
+        "feature_hash": snapshot.feature_hash,
         "snapshot_time": snapshot.snapshot_time,
         "feature_count": snapshot.feature_count,
         "missing_count": snapshot.missing_count,
@@ -440,6 +443,7 @@ def _build_snapshot_prediction_event(
         sample_id: str,
         serving_snapshot_id: str,
         snapshot_version: int,
+        feature_hash: str,
         prediction: dict[str, Any],
         predicted_at: float,
         missing_count: int,
@@ -451,6 +455,7 @@ def _build_snapshot_prediction_event(
         "sample_id": sample_id,
         "serving_snapshot_id": serving_snapshot_id,
         "snapshot_version": snapshot_version,
+        "feature_hash": feature_hash,
         "model_run_id": prediction["model_run_id"],
         "model_name": prediction.get("model_name"),
         "model_version": prediction.get("model_version"),

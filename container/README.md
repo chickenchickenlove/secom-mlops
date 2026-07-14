@@ -4,7 +4,7 @@ This stack runs the local SECOM/FDC online path, offline/raw store sync, model s
 
 ## Components
 
-- PostgreSQL stores `feature_events`, `actual_labels`, `prediction_logs`, offline snapshots, and monitoring metrics.
+- PostgreSQL stores `feature_events`, `serving_feature_snapshots`, append-only `label_events`, `prediction_logs`, offline data, and monitoring metrics.
 - Kafka carries feature patch, feature state update, label event, and prediction event topics.
 - Prometheus scrapes Kafka broker JMX metrics exposed by the JMX exporter.
 - Valkey stores the latest online feature snapshot per `sample_id`.
@@ -21,7 +21,8 @@ secom-feature-patches
 -> feature-assembler
 -> secom-feature-state-updates
 -> feature-materializer
--> Valkey online_feature_snapshot:{sample_id}
+   -> Valkey online_feature_snapshot:{sample_id}
+   -> PostgreSQL serving_feature_snapshots
 -> serving-api /predict-by-id
 -> model-gateway
 -> model-server-release
@@ -37,7 +38,7 @@ secom-feature-patches
 Label evaluation store:
 secom-label-events
 -> label-archiver
--> PostgreSQL actual_labels
+-> PostgreSQL append-only label_events
 
 Prediction evidence store:
 serving-api /predict-by-id
@@ -45,37 +46,53 @@ serving-api /predict-by-id
 -> prediction-log-archiver
 -> PostgreSQL prediction_logs
 
-Metrics:
-prediction_logs + actual_labels
+Prediction window metrics:
+prediction_logs
 -> metrics-evaluator
--> model_metrics / prediction_window_metrics
+-> prediction_window_metrics
 -> Grafana
 
-Quality windows:
-prediction_logs + actual_labels
--> quality-window-evaluator
--> model_quality_windows
+Live label-backed model quality:
+prediction_logs + label_events
+-> metrics-evaluator / evaluate_live_model_quality.py
+-> live_model_quality_evaluations
 -> Grafana
 
 Drift metrics:
 prediction_logs
   + serving_feature_snapshots
-    logical join = serving_snapshot_id + sample_id + snapshot_version
+    logical identity = serving_snapshot_id + sample_id + snapshot_version
+    content check = feature_hash
 -> drift-metrics-evaluator
 -> drift_metrics
 -> Grafana
 ```
 
 Operational prediction evidence is emitted only by `/predict-by-id`. Each row
-records the `serving_snapshot_id` and sample-local `snapshot_version` used for
-inference. `/predict` accepts caller-supplied feature vectors and is a debug
+records the `serving_snapshot_id`, sample-local `snapshot_version`, and
+`feature_hash` used for inference. `/predict` accepts caller-supplied feature vectors and is a debug
 endpoint, so it does not emit operational prediction evidence.
+
+`label_events` is an append-only correction history. `measured_at` is measurement
+metadata, `available_at` is the time PostgreSQL can observe the label, and a
+higher `label_revision` supersedes an earlier revision for the same sample.
+Cutoff selection first applies `available_at <= T` and then chooses the highest
+available revision.
+
+The live quality evaluator captures one database cutoff `T` per cycle and uses
+`S = T-L-W`, `E = T-L`, and the half-open decision window `[S,E)`. It selects
+the global-first prediction for each semantic decision, left-joins labels at
+`T`, and stores coverage, status, confusion counts, and eligible scalar metrics
+in one `live_model_quality_evaluations` row per model run and threshold.
+`model_metrics` is reserved for offline evaluation; its label-history migration
+is still pending.
 
 The three feature-vector consumers
 `evaluate_drift_metrics.py`, `create_drift_reference_baseline.py`, and
 `evaluate_fixed_reference_drift_metrics.py` join `prediction_logs` to
-`serving_feature_snapshots` on the logical triple `serving_snapshot_id +
-sample_id + snapshot_version` and read `serving_feature_snapshots.features_json`.
+`serving_feature_snapshots` on the logical identity `serving_snapshot_id +
+sample_id + snapshot_version`, require matching `feature_hash`, and read
+`serving_feature_snapshots.features_json`.
 Prediction events and `prediction_logs` do not duplicate the full feature
 vector. The small `missing_count` scalar remains in prediction logs. The
 snapshot reference is intentionally logical; there is no foreign key.
@@ -144,7 +161,6 @@ model-server-release
 model-gateway
 serving-api
 metrics-evaluator
-quality-window-evaluator
 drift-metrics-evaluator
 ```
 
@@ -199,9 +215,13 @@ Label event workload:
 uv run python scripts/workload/send_label_events_from_cursor.py \
   --max-samples 30000 \
   --batch-size 300 \
-  --sleep-seconds 10 \
-  --label-delay-seconds 300
+  --sleep-seconds 10
 ```
+
+The producer sets `measured_at` immediately before publishing. The label
+archiver records `available_at` with the PostgreSQL clock when it first inserts
+the append-only event. To simulate delayed labels, start the label workload
+later instead of passing a synthetic availability timestamp.
 
 Prediction request workload:
 
@@ -218,10 +238,12 @@ This workload calls `/predict-by-id`, so successful requests create
 snapshot-backed operational prediction evidence. Direct `/predict` calls are
 debug-only and do not create rows in `prediction_logs`.
 
-The cursor state file is:
+The default cursor state files are:
 
 ```text
-runtime/online_workload_state.json
+runtime/online_workload_next_feature_{feature_group}_state.json
+runtime/online_workload_next_label_state.json
+runtime/online_workload_next_predict_state.json
 ```
 
 ## Verify Stores
@@ -239,7 +261,7 @@ FROM feature_events;
 "
 ```
 
-Complete feature samples:
+Recent raw feature patch aggregation:
 
 ```bash
 docker-compose exec postgres psql -U mlops -d monitoring -c "
@@ -258,39 +280,110 @@ LIMIT 20;
 "
 ```
 
-Label store:
+Append-only label event history:
 
 ```bash
 docker-compose exec postgres psql -U mlops -d monitoring -c "
 SELECT
-  COUNT(*) AS label_count,
+  COUNT(*) AS label_event_count,
+  COUNT(DISTINCT sample_id) AS labeled_sample_count,
   COUNT(*) FILTER (WHERE actual_label = 'fail') AS fail_count,
   COUNT(*) FILTER (WHERE actual_label = 'pass') AS pass_count,
-  MIN(sample_id) AS first_sample_id,
-  MAX(sample_id) AS last_sample_id
-FROM actual_labels;
+  MIN(label_revision) AS min_revision,
+  MAX(label_revision) AS max_revision,
+  MIN(to_timestamp(available_at)) AS first_available_at,
+  MAX(to_timestamp(available_at)) AS last_available_at
+FROM label_events;
 "
 ```
 
-Feature-label coverage:
+Labels visible at the current cutoff `T`:
 
 ```bash
 docker-compose exec postgres psql -U mlops -d monitoring -c "
-WITH complete_feature_samples AS (
-  SELECT sample_id
-  FROM feature_events
-  GROUP BY sample_id
-  HAVING COUNT(*) = 3
-     AND SUM((SELECT COUNT(*) FROM jsonb_object_keys(features_json))) = 590
+WITH params AS (
+  SELECT EXTRACT(EPOCH FROM statement_timestamp())::DOUBLE PRECISION AS cutoff_time
+),
+ranked_labels AS (
+  SELECT
+    le.*,
+    ROW_NUMBER() OVER (
+      PARTITION BY le.sample_id
+      ORDER BY
+        le.label_revision DESC,
+        le.available_at DESC,
+        le.label_event_id DESC
+    ) AS label_rank
+  FROM label_events le
+  CROSS JOIN params p
+  WHERE le.available_at <= p.cutoff_time
 )
 SELECT
-  COUNT(*) AS complete_feature_samples,
-  COUNT(*) FILTER (WHERE a.sample_id IS NOT NULL) AS samples_with_label,
-  COUNT(*) FILTER (WHERE a.sample_id IS NULL) AS samples_without_label,
+  COUNT(*) AS labeled_sample_count,
+  COUNT(*) FILTER (WHERE actual_label = 'fail') AS fail_count,
+  COUNT(*) FILTER (WHERE actual_label = 'pass') AS pass_count
+FROM ranked_labels
+WHERE label_rank = 1;
+"
+```
+
+First-complete serving snapshot and label coverage at cutoff `T`:
+
+```bash
+docker-compose exec postgres psql -U mlops -d monitoring -c "
+WITH params AS (
+  SELECT EXTRACT(EPOCH FROM statement_timestamp())::DOUBLE PRECISION AS cutoff_time
+),
+ranked_complete_snapshots AS (
+  SELECT
+    s.sample_id,
+    s.available_at,
+    ROW_NUMBER() OVER (
+      PARTITION BY s.sample_id
+      ORDER BY
+        s.available_at ASC,
+        s.snapshot_version ASC,
+        s.serving_snapshot_id ASC
+    ) AS snapshot_rank
+  FROM serving_feature_snapshots s
+  WHERE s.snapshot_status = 'complete'
+    AND s.is_complete = TRUE
+),
+first_complete_snapshots AS (
+  SELECT sample_id, available_at
+  FROM ranked_complete_snapshots
+  WHERE snapshot_rank = 1
+),
+ranked_labels AS (
+  SELECT
+    le.sample_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY le.sample_id
+      ORDER BY
+        le.label_revision DESC,
+        le.available_at DESC,
+        le.label_event_id DESC
+    ) AS label_rank
+  FROM label_events le
+  CROSS JOIN params p
+  WHERE le.available_at <= p.cutoff_time
+),
+labels_at_cutoff AS (
+  SELECT sample_id
+  FROM ranked_labels
+  WHERE label_rank = 1
+)
+SELECT
+  COUNT(*) AS first_complete_samples,
+  COUNT(l.sample_id) AS samples_with_label,
+  COUNT(*) - COUNT(l.sample_id) AS samples_without_label,
   MIN(f.sample_id) AS first_feature_sample_id,
   MAX(f.sample_id) AS last_feature_sample_id
-FROM complete_feature_samples f
-LEFT JOIN actual_labels a ON a.sample_id = f.sample_id;
+FROM first_complete_snapshots f
+CROSS JOIN params p
+LEFT JOIN labels_at_cutoff l
+  ON l.sample_id = f.sample_id
+WHERE f.available_at <= p.cutoff_time;
 "
 ```
 
@@ -339,10 +432,10 @@ docker-compose up -d --build
 docker-compose ps
 ```
 
-Candidate retraining now uses on-demand point-in-time reconstruction from
-`feature_events`. Materialized `offline_feature_snapshots` utilities remain
-available for smoke tests/backfills, but they are not required for the
-operational retraining DAG.
+Candidate retraining reads immutable online-serving history directly from
+`serving_feature_snapshots`. It uses each sample's first complete snapshot and
+the snapshot's Valkey-confirmed `available_at` as the training decision time.
+It does not reconstruct the training vector from `feature_events`.
 
 Trigger the Airflow training DAG:
 
@@ -350,14 +443,17 @@ Trigger the Airflow training DAG:
 train_candidate_from_offline_point_in_time_features
 ```
 
-Then trigger the serving snapshot gate DAG on the intended independent gate
-window:
+Then trigger the serving prediction decision gate DAG on its intended
+independent cohort:
 
 ```text
 evaluate_candidate_serving_snapshot_gate
 ```
 
-Both DAGs take a required `point_time` datetime and a `recent_minutes` window.
+Both DAGs use `cohort_start_time`, `cutoff_time`, and
+`label_maturity_seconds`, but their decision spines are different. Training
+uses first-complete snapshot `available_at`; the serving gate uses champion
+prediction `predicted_at`.
 
 For direct debugging from `container`, run the current trainer:
 
@@ -367,26 +463,36 @@ docker-compose run --rm \
   -e MLFLOW_TRACKING_URI=http://mlflow:5100 \
   model-trainer \
   python scripts/training/train_candidate_from_offline_point_in_time_features.py \
-    --point-time-start 9999999399 \
-    --point-time 9999999999 \
+    --cohort-start-time 9999999399 \
+    --cutoff-time 9999999999 \
+    --label-maturity-seconds 0 \
     --candidate-group retrain_20260701_001 \
     --training-job-id retrain_20260701_001 \
     --min-samples 500 \
+    --min-label-coverage 0.95 \
     --min-fail-samples 20 \
     --min-pass-samples 20
 ```
 
-The required hard gate is serving snapshot evaluation. The retraining DAG runs
-this as its final task:
+The required hard gate evaluates candidate and champion on the same cohort of
+actual champion prediction decisions. For direct debugging from `container`,
+run:
 
 ```bash
 docker-compose run --rm \
   -e MONITORING_DATABASE_URL=postgresql://mlops:mlops@postgres:5432/monitoring \
   model-trainer \
   python scripts/monitoring/compare_candidate_with_champion_serving.py \
-    --point-time-start 9999999399 \
-    --point-time 9999999999 \
-    --set-tags
+    --cohort-start-time 1783764800 \
+    --cutoff-time 1783765500 \
+    --label-maturity-seconds 0 \
+    --max-decisions 1000 \
+    --min-decisions 500 \
+    --min-label-coverage 0.95 \
+    --min-fail-samples 20 \
+    --min-pass-samples 20 \
+    --set-tags \
+    --fail-on-gate-failure
 ```
 
 Promote only after the approved request exists:
@@ -408,9 +514,12 @@ docker-compose exec postgres psql -U mlops -d monitoring -c "
 SELECT
   request_id,
   source_version,
+  source_run_id,
   target_alias,
-  gate_status,
+  eval_type,
+  eval_status,
   approval_status,
+  rollout_status,
   to_timestamp(requested_at) AS requested_at,
   to_timestamp(deployed_at) AS deployed_at
 FROM model_deployment_requests
@@ -427,7 +536,7 @@ docker-compose up -d --no-deps --force-recreate model-server-release
 curl http://127.0.0.1:28091/metadata
 ```
 
-### Train Candidate From Offline Point-in-Time Features
+### Train Candidate From Serving Snapshot History
 
 Run from `container`.
 
@@ -437,11 +546,13 @@ docker-compose run --rm \
   -e MLFLOW_TRACKING_URI=http://mlflow:5100 \
   model-trainer \
   python scripts/training/train_candidate_from_offline_point_in_time_features.py \
-    --point-time-start 9999999399 \
-    --point-time 9999999999 \
+    --cohort-start-time 9999999399 \
+    --cutoff-time 9999999999 \
+    --label-maturity-seconds 0 \
     --candidate-group retrain_20260701_001 \
     --training-job-id retrain_20260701_001 \
     --min-samples 500 \
+    --min-label-coverage 0.95 \
     --min-fail-samples 20 \
     --min-pass-samples 20
 ```
@@ -453,26 +564,49 @@ ML_CANDIDATE_GROUP
 ML_TRAINING_JOB_ID
 ```
 
-The point-in-time trainer uses `serving_feature_snapshots` as the sample/time
-spine, reconstructs features from `feature_events`, joins labels by
-`sample_point_time <= labeled_at`, trains a RandomForest
-candidate, registers a new `secom-fail-detector` model version, points the
-`candidate` alias to it, and writes model version tags such as:
+The trainer defines `S = cohort_start_time`, `T = cutoff_time`, and
+`L = label_maturity_seconds`, then derives `cohort_end_time = T - L`. It first
+selects each sample's earliest complete `serving_feature_snapshots` row across
+the full snapshot history and includes it when its `available_at` is in
+`[S, T-L]`. The stored `features_json` is the training vector; `snapshot_time`
+remains event-time metadata and is not the training cutoff.
 
-`serving_feature_snapshots` also records the sample-local `snapshot_version` and
-the Valkey-confirmed `available_at`. The current trainer has not switched to an
-availability-time cutoff: its point time and window filters still use the assembler
-event-time field `snapshot_time`.
+After applying the first-complete and time filters, the trainer orders eligible
+snapshots by `available_at` descending and selects at most 1,000 rows before
+joining labels.
+
+Labels are selected from append-only `label_events`: only rows with
+`available_at <= T` are visible, and the highest `label_revision` for each
+sample wins. Labels are `LEFT JOIN`ed to the selected snapshot cohort so
+unlabeled rows remain part of the `label_coverage` denominator. Only labeled
+rows are used for model development.
+
+The main Airflow defaults require 1,000 labeled development rows. The Candidate
+uses a stratified 80% selection-training source and 20% validation source to
+select hyperparameters and the threshold, then refits the registered model on
+the complete labeled development source. With the default full cohort, this is
+800 training rows, 200 validation rows, and a final fit on all 1,000 rows.
+
+The bootstrap Champion uses the first 1,000 raw SECOM rows and follows the same
+800/200 selection and full-1,000 refit procedure. Candidate and Champion use
+the same development size and selection procedure, not the same source rows.
+
+The trainer registers a new `secom-fail-detector` model version, points the
+`candidate` alias to it, and writes model version tags such as:
 
 ```text
 role=candidate
 candidate_group=...
 training_job_id=...
-train_source=offline_feature_store_point_in_time
+train_source=serving_feature_snapshot_history
 training_spine=serving_feature_snapshots
-training_point_time=serving_feature_snapshots.snapshot_time
-point_time_start=...
-point_time=...
+training_decision_time=serving_feature_snapshots.available_at
+snapshot_selection=first_complete
+label_selection=available_at_lte_cutoff_then_max_revision
+cohort_start_time=...
+cohort_end_time=...
+cutoff_time=...
+label_maturity_seconds=...
 gate_status=pending
 ```
 
@@ -482,25 +616,57 @@ data, prefer `scripts/training/train_candidate_from_offline_point_in_time_featur
 
 ### Airflow Candidate Retraining DAGs
 
-The DAG `train_candidate_from_offline_point_in_time_features` trains and registers a
-candidate from offline point-in-time reconstructed features.
+The DAG `train_candidate_from_offline_point_in_time_features` trains and
+registers a candidate from first-complete serving snapshot history and the
+label history visible at `cutoff_time`.
 
 Trigger it manually from the Airflow UI, or with config such as:
 
 ```json
 {
-  "point_time": "2026-07-05T13:00:00+09:00",
-  "recent_minutes": 10,
-  "min_samples": 500,
+  "cohort_start_time": "2026-07-05T12:50:00+09:00",
+  "cutoff_time": "2026-07-05T13:00:00+09:00",
+  "label_maturity_seconds": 0,
+  "min_samples": 1000,
+  "min_label_coverage": 0.95,
   "min_fail_samples": 20,
   "min_pass_samples": 20
 }
 ```
 
-After training succeeds, run `evaluate_candidate_serving_snapshot_gate` on the
-chosen serving snapshot gate window. If the gate fails, run
-`cleanup_failed_candidate_alias`. If the gate passes, create or approve the
-deployment request before canary/release deployment.
+After training succeeds, trigger `evaluate_candidate_serving_snapshot_gate`
+with an independently selected prediction decision cohort:
+
+```json
+{
+  "cohort_start_time": "2026-07-11T19:45:00+09:00",
+  "cutoff_time": "2026-07-11T20:00:00+09:00",
+  "label_maturity_seconds": 0,
+  "candidate_version": null,
+  "max_decisions": 1000,
+  "min_decisions": 500,
+  "min_label_coverage": 0.95,
+  "min_fail_samples": 20,
+  "min_pass_samples": 20,
+  "dry_run": false
+}
+```
+
+The gate selects the global-first decision for each semantic identity, filters
+the requested time cohort, and then keeps the latest `max_decisions` rows for
+the current Champion model run. It verifies the exact serving snapshot identity
+and Feature hash and uses the highest label revision with
+`available_at <= cutoff_time`.
+
+Candidate and Champion are replayed on the same labeled Feature vectors. The
+Airflow task succeeds only when the Gate status is `passed`; `failed`,
+`insufficient_data`, and integrity errors fail the task.
+
+The current Gate filters the Champion `model_run_id` but does not yet enforce
+`runtime_slot='release'` or the actual release threshold.
+
+If the gate fails, run `cleanup_failed_candidate_alias`. If the gate passes,
+create or approve the deployment request before canary/release deployment.
 
 ### Fixed Reference Drift Baseline
 
@@ -559,32 +725,35 @@ docker-compose run --rm model-trainer \
     --set-tags
 ```
 
-### Required Offline Candidate Gate
+### Record Deployment Request After the Serving Gate
 
-Offline comparison using the same labeled snapshot window for both models:
+The required promotion gate is
+`evaluate_candidate_serving_snapshot_gate`, described above. A passed Gate
+records its result in the Candidate model version tags but does not
+automatically create a deployment request.
 
-```bash
-docker-compose run --rm \
-  -e MONITORING_DATABASE_URL=postgresql://mlops:mlops@postgres:5432/monitoring \
-  model-trainer \
-  python scripts/monitoring/compare_candidate_with_champion_offline.py \
-    --build-cutoff-time 9999999999 \
-    --limit 10000 \
-    --set-tags \
-    --record-deployment-request \
-    --deployment-approval-status approved \
-    --deployment-notes "offline gate passed; ready for manual promote"
+After the Gate passes, use the Airflow DAG:
+
+```text
+record_serving_candidate_deployment_request
 ```
 
-Use `--limit 0` to evaluate all labeled snapshots for the cutoff.
+For direct debugging from `container`, the equivalent command is:
 
-When `--record-deployment-request` is set, a passed offline gate writes a
-`model_deployment_requests` row with the source version, previous champion
-version, gate status, and metric summary. If the gate fails, the deployment
-request is skipped and `candidate` should be cleared.
+```bash
+docker-compose run --rm model-trainer \
+  python scripts/deployment/record_serving_candidate_deployment_request.py \
+    --approval-status approved \
+    --notes "serving prediction decision gate passed"
+```
 
-`scripts/deployment/record_model_deployment.py` remains available for manual backfill or
-exceptional records.
+This command verifies the Candidate's serving Gate tags and writes a
+`model_deployment_requests` row. Promotion with
+`--require-approved-request` requires this approved request.
+
+The legacy `compare_candidate_with_champion_offline.py` is not part of the
+current promotion path. It still depends on the removed `actual_labels` table
+and must not be used with the current schema.
 
 ### Promote Candidate To Champion
 
@@ -604,12 +773,14 @@ than leaving both `candidate` and `champion` on the same model version. Use
 `--keep-source-alias` only when you intentionally want to keep both aliases.
 
 `--require-approved-request` requires a matching `model_deployment_requests`
-row created by the offline gate:
+row created after the Serving Gate:
 
 ```text
 source_version = candidate version
+source_run_id = candidate run id
 target_alias = champion
-gate_status = passed
+eval_type = serving_snapshot
+eval_status = passed
 approval_status = approved
 ```
 
@@ -785,17 +956,36 @@ The registry alias is the control-plane pointer. The serving process should be
 verified through `/metadata` because changing an MLflow alias does not hot-reload
 an already running model server.
 
-## Verify Quality Windows
+## Verify Live Model Quality
 
-`quality-window-evaluator` builds non-overlapping label-backed quality windows
-from `prediction_logs` joined to `actual_labels`.
+`metrics-evaluator` runs `evaluate_live_model_quality.py` every 30 seconds. For
+each cycle it captures one database cutoff `T`, sets `E = T-L` and
+`S = E-W`, and evaluates decisions in the sliding time window `[S,E)`.
+
+The current Docker Compose defaults are:
 
 ```text
-window type = non_overlapping_labeled_predictions
-window size = 500 labeled predictions
+L = 0 seconds
+W = 600 seconds
+minimum decisions = 500
+minimum label coverage = 0.95
+minimum fail labels = 20
+minimum pass labels = 20
 partition = model_run_id + threshold
-ordering = predicted_at, prediction_id
 ```
+
+Before applying the time window, repeated predictions are reduced to the
+global-first row for each semantic decision:
+
+```text
+model_run_id + threshold + sample_id
+  + serving_snapshot_id + snapshot_version
+```
+
+The evaluator joins the highest `label_revision` visible under
+`label_events.available_at <= T`. It writes one
+`live_model_quality_evaluations` row per non-empty model/threshold cohort. A
+cycle with no decisions writes no row.
 
 Status summary:
 
@@ -803,43 +993,52 @@ Status summary:
 docker-compose exec postgres psql -U mlops -d monitoring -c "
 SELECT
   evaluation_status,
-  COUNT(*) AS window_count,
-  MIN(to_timestamp(window_start)) AS first_window,
-  MAX(to_timestamp(window_end)) AS last_window
-FROM model_quality_windows
+  COUNT(*) AS evaluation_count,
+  MIN(to_timestamp(cutoff_time)) AS first_cutoff,
+  MAX(to_timestamp(cutoff_time)) AS latest_cutoff
+FROM live_model_quality_evaluations
 GROUP BY 1
 ORDER BY 1;
 "
 ```
 
-Latest windows:
+Latest evaluations:
 
 ```bash
 docker-compose exec postgres psql -U mlops -d monitoring -c "
 SELECT
-  window_id,
+  evaluation_id,
+  model_run_id,
+  threshold,
   evaluation_status,
+  n_decisions,
   n_samples,
+  n_pass_samples,
   n_fail_samples,
+  label_coverage,
   accuracy,
   fail_precision,
   fail_recall,
   fail_f1,
-  pr_auc,
+  fail_average_precision,
   true_negative,
   false_positive,
   false_negative,
   true_positive,
+  to_timestamp(cutoff_time) AS cutoff_time,
   to_timestamp(window_start) AS window_start,
   to_timestamp(window_end) AS window_end
-FROM model_quality_windows
-ORDER BY window_id DESC
+FROM live_model_quality_evaluations
+ORDER BY cutoff_time DESC, model_run_id, threshold
 LIMIT 10;
 "
 ```
 
-Use only `evaluation_status = 'ok'` windows for quality trend and alert
-decisions. `insufficient_samples` is normally the latest in-progress window.
+Use only `evaluation_status = 'ok'` rows for scalar quality trends and alerts.
+The evaluator still stores cohort counts and the confusion matrix for non-`ok`
+rows, but stores `accuracy`, fail precision/recall/F1, and fail average
+precision as `NULL`. Status checks run in this order: decisions, label coverage,
+fail labels, and pass labels.
 
 ## Verify Drift Metrics
 
@@ -964,9 +1163,9 @@ grafana/dashboards/dashboard.json
 Recommended dashboard grouping:
 
 ```text
-Labeled Prediction Quality Windows
-  source: model_quality_windows
-  purpose: primary label-backed model quality trend
+Live Sliding Model Quality
+  source: live_model_quality_evaluations
+  purpose: label coverage, status, confusion matrix, and live quality trends
 
 Output Drift
   source: drift_metrics
@@ -976,9 +1175,13 @@ Input / Feature Drift
   source: drift_metrics
   purpose: missing-count and top feature shift monitoring
 
-Rolling / Latest Metrics
-  source: model_metrics / prediction_window_metrics
-  purpose: smoke visibility and latest-state debugging
+Prediction Traffic / Operational Windows
+  source: prediction_logs / prediction_window_metrics
+  purpose: request volume, latency, prediction mix, and latest-state debugging
+
+Offline Model Evaluation
+  source: model_metrics
+  purpose: manual/offline evaluation; label-history migration is still pending
 ```
 
 ## Script Boundary
@@ -1001,19 +1204,30 @@ scripts/workload/request_predictions_from_cursor.py
 scripts/workload/smoke_predict_by_id.py
 ```
 
-Offline/manual jobs:
+Offline snapshot utilities:
 
 ```text
 scripts/utility/build_offline_feature_snapshots.py
 scripts/utility/reconstruct_offline_features.py
 scripts/monitoring/predict_offline_feature_snapshots.py
-scripts/monitoring/evaluate_offline_model_metrics.py
 ```
+
+Legacy Label-backed offline evaluators:
+
+```text
+scripts/monitoring/evaluate_offline_model_metrics.py
+scripts/monitoring/compare_candidate_with_champion_offline.py
+```
+
+The legacy evaluators still query the removed `actual_labels` table. They are
+not part of the current training, monitoring, or promotion path and must be
+migrated to `label_events` before they can be used with the current schema.
 
 Runtime monitoring evaluators:
 
 ```text
 scripts/monitoring/run_metrics_evaluator_loop.py
-scripts/monitoring/evaluate_model_quality_windows.py
+  -> scripts/monitoring/evaluate_prediction_window_metrics.py
+  -> scripts/monitoring/evaluate_live_model_quality.py
 scripts/monitoring/evaluate_drift_metrics.py
 ```

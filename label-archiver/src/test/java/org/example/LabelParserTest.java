@@ -10,10 +10,12 @@ class LabelParserTest {
     void parsesValidLabelEvent() {
         LabelRow label = LabelParser.parse(validPayload(), "secom-0000001");
 
+        assertEquals("label:secom-0000001:r1", label.labelEventId());
         assertEquals("secom-0000001", label.sampleId());
+        assertEquals(1L, label.labelRevision());
+        assertEquals(123.45, label.measuredAt());
         assertEquals(1, label.actualValue());
         assertEquals("fail", label.actualLabel());
-        assertEquals(123.45, label.labeledAt());
     }
 
     @Test
@@ -79,13 +81,41 @@ class LabelParserTest {
         assertEquals("actual_label mismatch: actual_value=1 actual_label=pass", error.getMessage());
     }
 
+    @Test
+    void rejectsNonPositiveLabelRevision() {
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> LabelParser.parse(
+                validPayload().replace("\"label_revision\": 1", "\"label_revision\": 0"),
+                null
+            )
+        );
+
+        assertEquals("label_revision must be > 0: 0", error.getMessage());
+    }
+
+    @Test
+    void rejectsNegativeMeasuredAt() {
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> LabelParser.parse(
+                validPayload().replace("\"measured_at\": 123.45", "\"measured_at\": -1.0"),
+                null
+            )
+        );
+
+        assertEquals("measured_at must be >= 0: -1.0", error.getMessage());
+    }
+
     private static String validPayload() {
         return """
             {
+              "label_event_id": "label:secom-0000001:r1",
               "sample_id": "secom-0000001",
+              "label_revision": 1,
+              "measured_at": 123.45,
               "actual_value": 1,
-              "actual_label": "fail",
-              "label_available_time": 123.45
+              "actual_label": "fail"
             }
             """;
     }

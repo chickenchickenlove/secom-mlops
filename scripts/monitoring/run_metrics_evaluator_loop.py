@@ -15,6 +15,13 @@ def env_int(name: str, default: int) -> int:
     return int(value)
 
 
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return float(value)
+
+
 def run_command(command: list[str]) -> None:
     logger.info("+ %s", " ".join(command))
     subprocess.run(command, check=True)
@@ -22,8 +29,12 @@ def run_command(command: list[str]) -> None:
 
 def run_once() -> None:
     prediction_window_limit = env_int("PREDICTION_WINDOW_LIMIT", 500)
-    model_metric_limit = env_int("MODEL_METRIC_LIMIT", 500)
-    min_fail_count = env_int("MIN_FAIL_COUNT", 1)
+    label_maturity_seconds = env_float("LABEL_MATURITY_SECONDS", 0.0)
+    monitoring_window_seconds = env_float("MONITORING_WINDOW_SECONDS", 600.0)
+    min_decisions = env_int("MIN_DECISIONS", 500)
+    min_label_coverage = env_float("MIN_LABEL_COVERAGE", 0.95)
+    min_fail_samples = env_int("MIN_FAIL_SAMPLES", 20)
+    min_pass_samples = env_int("MIN_PASS_SAMPLES", 20)
 
     try:
         run_command([
@@ -42,11 +53,19 @@ def run_once() -> None:
     try:
         run_command([
             sys.executable,
-            "scripts/monitoring/evaluate_model_metrics.py",
-            "--limit",
-            str(model_metric_limit),
-            "--min-fail-count",
-            str(min_fail_count),
+            "scripts/monitoring/evaluate_live_model_quality.py",
+            "--label-maturity-seconds",
+            str(label_maturity_seconds),
+            "--monitoring-window-seconds",
+            str(monitoring_window_seconds),
+            "--min-decisions",
+            str(min_decisions),
+            "--min-label-coverage",
+            str(min_label_coverage),
+            "--min-fail-samples",
+            str(min_fail_samples),
+            "--min-pass-samples",
+            str(min_pass_samples),
         ])
     except subprocess.CalledProcessError as error:
         logger.warning(
@@ -67,12 +86,20 @@ def main() -> None:
         "metrics_evaluator_loop_started "
         "interval_seconds=%s "
         "prediction_window_limit=%s "
-        "model_metric_limit=%s "
-        "min_fail_count=%s",
+        "label_maturity_seconds=%s "
+        "monitoring_window_seconds=%s "
+        "min_decisions=%s "
+        "min_label_coverage=%s "
+        "min_fail_samples=%s "
+        "min_pass_samples=%s",
         interval_seconds,
         env_int("PREDICTION_WINDOW_LIMIT", 500),
-        env_int("MODEL_METRIC_LIMIT", 500),
-        env_int("MIN_FAIL_COUNT", 1),
+        env_float("LABEL_MATURITY_SECONDS", 0.0),
+        env_float("MONITORING_WINDOW_SECONDS", 600.0),
+        env_int("MIN_DECISIONS", 500),
+        env_float("MIN_LABEL_COVERAGE", 0.95),
+        env_int("MIN_FAIL_SAMPLES", 20),
+        env_int("MIN_PASS_SAMPLES", 20),
     )
 
     while True:

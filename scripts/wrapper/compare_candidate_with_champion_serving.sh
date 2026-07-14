@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-POINT_TIME_START=""
-POINT_TIME=""
+COHORT_START_TIME=""
+CUTOFF_TIME=""
+LABEL_MATURITY_SECONDS=""
 TRACKING_URI=""
 MODEL_NAME=""
 CANDIDATE_ALIAS="candidate"
 CHAMPION_ALIAS="champion"
 CANDIDATE_VERSION=""
 CHAMPION_VERSION=""
-LIMIT="0"
-MIN_SAMPLES="500"
+MAX_DECISIONS="1000"
+MIN_DECISIONS="500"
+MIN_LABEL_COVERAGE="0.95"
 MIN_FAIL_SAMPLES="20"
 MIN_PASS_SAMPLES="20"
 PRIMARY_METRIC="fail_f1"
@@ -27,16 +29,18 @@ DEPLOYMENT_APPROVED_BY=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --point-time-start) POINT_TIME_START="${2:-}"; shift 2 ;;
-    --point-time) POINT_TIME="${2:-}"; shift 2 ;;
+    --cohort-start-time) COHORT_START_TIME="${2:-}"; shift 2 ;;
+    --cutoff-time) CUTOFF_TIME="${2:-}"; shift 2 ;;
+    --label-maturity-seconds) LABEL_MATURITY_SECONDS="${2:-}"; shift 2 ;;
     --tracking-uri) TRACKING_URI="${2:-}"; shift 2 ;;
     --model-name) MODEL_NAME="${2:-}"; shift 2 ;;
     --candidate-alias) CANDIDATE_ALIAS="${2:-}"; shift 2 ;;
     --champion-alias) CHAMPION_ALIAS="${2:-}"; shift 2 ;;
     --candidate-version) CANDIDATE_VERSION="${2:-}"; shift 2 ;;
     --champion-version) CHAMPION_VERSION="${2:-}"; shift 2 ;;
-    --limit) LIMIT="${2:-0}"; shift 2 ;;
-    --min-samples) MIN_SAMPLES="${2:-}"; shift 2 ;;
+    --max-decisions|--limit) MAX_DECISIONS="${2:-}"; shift 2 ;;
+    --min-decisions) MIN_DECISIONS="${2:-}"; shift 2 ;;
+    --min-label-coverage) MIN_LABEL_COVERAGE="${2:-}"; shift 2 ;;
     --min-fail-samples) MIN_FAIL_SAMPLES="${2:-}"; shift 2 ;;
     --min-pass-samples) MIN_PASS_SAMPLES="${2:-}"; shift 2 ;;
     --primary-metric) PRIMARY_METRIC="${2:-}"; shift 2 ;;
@@ -127,6 +131,28 @@ print(f"{parsed:.6f}")
 ' "${value}" "${name}"
 }
 
+normalize_non_negative_seconds() {
+  local value="$1"
+  local name="$2"
+  "${PYTHON}" -c '
+import math
+import sys
+
+raw_value = sys.argv[1].strip()
+name = sys.argv[2]
+
+try:
+    parsed = float(raw_value)
+except ValueError as exc:
+    raise SystemExit(f"{name} must be numeric seconds: {raw_value}") from exc
+
+if parsed < 0.0 or not math.isfinite(parsed):
+    raise SystemExit(f"{name} must be finite and >= 0")
+
+print(f"{parsed:.6f}")
+' "${value}" "${name}"
+}
+
 normalize_model_version() {
   local value="$1"
   if is_blank "${value}"; then
@@ -151,18 +177,24 @@ if is_truthy "${DRY_RUN}"; then
   exit 0
 fi
 
-if is_blank "${POINT_TIME_START}"; then
-  echo "point_time_start is required" >&2
+if is_blank "${COHORT_START_TIME}"; then
+  echo "cohort_start_time is required" >&2
   exit 1
 fi
 
-if is_blank "${POINT_TIME}"; then
-  echo "point_time is required" >&2
+if is_blank "${CUTOFF_TIME}"; then
+  echo "cutoff_time is required" >&2
   exit 1
 fi
 
-POINT_TIME_START="$(normalize_epoch_time "${POINT_TIME_START}" "point_time_start")"
-POINT_TIME="$(normalize_epoch_time "${POINT_TIME}" "point_time")"
+if is_blank "${LABEL_MATURITY_SECONDS}"; then
+  echo "label_maturity_seconds is required" >&2
+  exit 1
+fi
+
+COHORT_START_TIME="$(normalize_epoch_time "${COHORT_START_TIME}" "cohort_start_time")"
+CUTOFF_TIME="$(normalize_epoch_time "${CUTOFF_TIME}" "cutoff_time")"
+LABEL_MATURITY_SECONDS="$(normalize_non_negative_seconds "${LABEL_MATURITY_SECONDS}" "label_maturity_seconds")"
 CANDIDATE_VERSION="$(normalize_model_version "${CANDIDATE_VERSION}")"
 CHAMPION_VERSION="$(normalize_model_version "${CHAMPION_VERSION}")"
 
@@ -171,12 +203,14 @@ PYTHON="$(resolve_python)"
 COMMAND=(
   "${PYTHON}"
   scripts/monitoring/compare_candidate_with_champion_serving.py
-  --point-time-start "${POINT_TIME_START}"
-  --point-time "${POINT_TIME}"
+  --cohort-start-time "${COHORT_START_TIME}"
+  --cutoff-time "${CUTOFF_TIME}"
+  --label-maturity-seconds "${LABEL_MATURITY_SECONDS}"
   --candidate-alias "${CANDIDATE_ALIAS}"
   --champion-alias "${CHAMPION_ALIAS}"
-  --limit "${LIMIT}"
-  --min-samples "${MIN_SAMPLES}"
+  --max-decisions "${MAX_DECISIONS}"
+  --min-decisions "${MIN_DECISIONS}"
+  --min-label-coverage "${MIN_LABEL_COVERAGE}"
   --min-fail-samples "${MIN_FAIL_SAMPLES}"
   --min-pass-samples "${MIN_PASS_SAMPLES}"
   --primary-metric "${PRIMARY_METRIC}"
@@ -225,6 +259,6 @@ if is_truthy "${RECORD_DEPLOYMENT_REQUEST}"; then
   fi
 fi
 
-echo "candidate_champion_serving_compare_command point_time_start=${POINT_TIME_START} point_time=${POINT_TIME} candidate_alias=${CANDIDATE_ALIAS} champion_alias=${CHAMPION_ALIAS} dry_run=${DRY_RUN}"
+echo "candidate_champion_serving_compare_command cohort_start_time=${COHORT_START_TIME} cutoff_time=${CUTOFF_TIME} label_maturity_seconds=${LABEL_MATURITY_SECONDS} max_decisions=${MAX_DECISIONS} candidate_alias=${CANDIDATE_ALIAS} champion_alias=${CHAMPION_ALIAS} dry_run=${DRY_RUN}"
 
 "${COMMAND[@]}"

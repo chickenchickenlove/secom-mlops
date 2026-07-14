@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 final class PredictionLogParser {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Pattern SAMPLE_ID_PATTERN = Pattern.compile("^secom-\\d{7}$");
+    private static final Pattern FEATURE_HASH_PATTERN = Pattern.compile("^sha256:v1:[0-9a-f]{64}$");
     private static final int MAX_MISSING_COUNT = 590;
 
     private PredictionLogParser() {
@@ -41,6 +42,7 @@ final class PredictionLogParser {
         String sampleId = requiredText(event, "sample_id");
         String servingSnapshotId = requiredText(event, "serving_snapshot_id");
         long snapshotVersion = requiredPositiveLong(event, "snapshot_version");
+        String featureHash = requiredText(event, "feature_hash");
 
         if (!SAMPLE_ID_PATTERN.matcher(sampleId).matches()) {
             throw new IllegalArgumentException("invalid sample_id: " + sampleId);
@@ -49,6 +51,9 @@ final class PredictionLogParser {
             throw new IllegalArgumentException(
                 "Kafka key differs from sample_id: key=" + kafkaKey + " sample_id=" + sampleId
             );
+        }
+        if (!FEATURE_HASH_PATTERN.matcher(featureHash).matches()) {
+            throw new IllegalArgumentException("invalid feature_hash: " + featureHash);
         }
 
         String modelRunId = requiredText(event, "model_run_id");
@@ -93,6 +98,7 @@ final class PredictionLogParser {
             sampleId,
             servingSnapshotId,
             snapshotVersion,
+            featureHash,
             modelRunId,
             modelName,
             modelVersion,

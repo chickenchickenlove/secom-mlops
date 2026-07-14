@@ -10,7 +10,7 @@ with DAG(
         dag_id="fixed_reference_drift_evaluator",
         description="Evaluate latest prediction window against the active fixed drift reference baseline.",
         start_date=pendulum.datetime(2026, 1, 1, tz="Asia/Seoul"),
-        schedule="*/3 * * * *",
+        schedule="*/1 * * * *",
         catchup=False,
         max_active_runs=1,
         default_args={

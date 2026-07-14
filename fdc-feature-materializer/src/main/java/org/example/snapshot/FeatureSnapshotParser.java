@@ -11,6 +11,7 @@ public final class FeatureSnapshotParser {
     private static final int NUM_FEATURES = 590;
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Pattern SAMPLE_ID_PATTERN = Pattern.compile("^secom-\\d{7}$");
+    private static final Pattern FEATURE_HASH_PATTERN = Pattern.compile("^sha256:v1:[0-9a-f]{64}$");
     private static final Set<String> SNAPSHOT_STATUSES = Set.of("partial", "complete");
 
     private FeatureSnapshotParser() {
@@ -42,6 +43,7 @@ public final class FeatureSnapshotParser {
         final String sampleId = requiredText(snapshot, "sample_id");
         final long sourceEventCount = requiredLong(snapshot, "source_event_count");
         final long snapshotVersion = requiredLong(snapshot, "snapshot_version");
+        final String featureHash = requiredText(snapshot, "feature_hash");
         final double snapshotTime = requiredNumber(snapshot, "snapshot_time");
         final double windowStart = requiredNumber(snapshot, "window_start");
         final double windowEnd = requiredNumber(snapshot, "window_end");
@@ -53,6 +55,7 @@ public final class FeatureSnapshotParser {
 
         validateIdentity(sampleId, kafkaKey);
         validateSnapshotVersion(sourceEventCount, snapshotVersion);
+        validateFeatureHash(featureHash);
         validateWindow(snapshotTime, windowStart, windowEnd);
         validateCompleteness(snapshotStatus, featureCount, missingCount, isComplete);
         validateCanonicalFeatures(sampleId, features, missingCount);
@@ -60,6 +63,7 @@ public final class FeatureSnapshotParser {
         return new ServingSnapshotRow(
             servingSnapshotId,
             snapshotVersion,
+            featureHash,
             sampleId,
             snapshotTime,
             windowStart,
@@ -114,6 +118,12 @@ public final class FeatureSnapshotParser {
                     + " source_event_count="
                     + sourceEventCount
             );
+        }
+    }
+
+    private static void validateFeatureHash(String featureHash) {
+        if (!FEATURE_HASH_PATTERN.matcher(featureHash).matches()) {
+            throw new IllegalArgumentException("invalid feature_hash: " + featureHash);
         }
     }
 

@@ -72,18 +72,19 @@ send_features() {
 }
 
 send_labels() {
+  sleep 60
   uv run python scripts/workload/send_label_events_from_cursor.py \
     --max-samples 6000 \
     --batch-size 30 \
-    --sleep-seconds 11 \
-    --label-delay-seconds 300
+    --sleep-seconds 10
 }
 
 send_predicts() {
+  sleep 30
   uv run python scripts/workload/request_predictions_from_cursor.py \
     --max-samples 6000 \
     --batch-size 30 \
-    --sleep-seconds 15 \
+    --sleep-seconds 10 \
     --concurrency 1 \
     --print-failures
 }
@@ -100,7 +101,6 @@ pids+=("$!")
 send_labels &
 pids+=("$!")
 
-sleep 30
 send_predicts &
 pids+=("$!")
 

@@ -552,32 +552,15 @@
         MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
         EVALUATION_INTERVAL_SECONDS: "30"
         PREDICTION_WINDOW_LIMIT: "500"
-        MODEL_METRIC_LIMIT: "500"
-        MIN_FAIL_COUNT: "1"
+        LABEL_MATURITY_SECONDS: "0"
+        MONITORING_WINDOW_SECONDS: "600"
+        MIN_DECISIONS: "500"
+        MIN_LABEL_COVERAGE: "0.95"
+        MIN_FAIL_SAMPLES: "20"
+        MIN_PASS_SAMPLES: "20"
       command:
         - python
         - scripts/monitoring/run_metrics_evaluator_loop.py
-      restart: unless-stopped
-
-    quality-window-evaluator:
-      build:
-        context: ..
-        dockerfile: container/dockerfiles/python-app.Dockerfile
-      depends_on:
-        postgres:
-          condition: service_healthy
-      environment:
-        MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
-      command:
-        - python
-        - scripts/monitoring/evaluate_model_quality_windows.py
-        - --loop
-        - --interval-seconds
-        - "30"
-        - --window-size
-        - "500"
-        - --min-fail-samples
-        - "10"
       restart: unless-stopped
 
     drift-metrics-evaluator:

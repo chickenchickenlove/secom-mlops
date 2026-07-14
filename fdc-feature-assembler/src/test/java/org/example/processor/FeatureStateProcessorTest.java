@@ -49,6 +49,7 @@ class FeatureStateProcessorTest {
             assertFalse(snapshot.get("is_complete").asBoolean());
             assertEquals(1, snapshot.get("source_event_count").asInt());
             assertEquals(1, snapshot.get("snapshot_version").asInt());
+            assertTrue(snapshot.get("feature_hash").asText().matches("^sha256:v1:[0-9a-f]{64}$"));
             assertEquals(
                 snapshot.get("source_event_count").asInt(),
                 snapshot.get("snapshot_version").asInt()

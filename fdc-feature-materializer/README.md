@@ -15,6 +15,12 @@ After the Valkey write succeeds, the materializer records `available_at` in
 PostgreSQL as the time that version was confirmed available online. Reprocessing the
 same snapshot id does not replace its first recorded `available_at`.
 
+Each snapshot also carries the assembler-generated `feature_hash`. The
+materializer validates its versioned SHA-256 format and preserves the same value
+in both the Valkey payload and PostgreSQL `serving_feature_snapshots`. It does
+not recalculate the hash. Downstream consumers use it to verify that prediction
+evidence and durable snapshot history refer to the same Feature vector.
+
 This service is configured with environment variables. CLI arguments are not
 supported.
 

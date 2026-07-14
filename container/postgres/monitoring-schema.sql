@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
   sample_id TEXT NOT NULL,
   serving_snapshot_id TEXT NOT NULL,
   snapshot_version BIGINT NOT NULL,
+  feature_hash TEXT NOT NULL,
   model_run_id TEXT NOT NULL,
   model_name TEXT,
   model_version TEXT,
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
     CHECK (threshold >= 0.0 AND threshold <= 1.0),
   CONSTRAINT chk_prediction_snapshot_version
     CHECK (snapshot_version > 0),
+  CONSTRAINT chk_prediction_feature_hash
+    CHECK (feature_hash ~ '^sha256:v1:[0-9a-f]{64}$'),
   CONSTRAINT chk_prediction_missing_count
     CHECK (missing_count >= 0 AND missing_count <= 590)
 );
@@ -38,18 +41,7 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
     ON prediction_logs (sample_id);
 
   CREATE INDEX IF NOT EXISTS idx_prediction_logs_serving_snapshot
-    ON prediction_logs (serving_snapshot_id, sample_id, snapshot_version);
-
-  CREATE TABLE IF NOT EXISTS actual_labels (
-    sample_id TEXT PRIMARY KEY,
-    actual_value INTEGER NOT NULL,
-    actual_label TEXT NOT NULL,
-    labeled_at DOUBLE PRECISION NOT NULL,
-    CONSTRAINT chk_actual_value
-      CHECK (actual_value IN (-1, 1)),
-    CONSTRAINT chk_actual_label
-      CHECK (actual_label IN ('pass', 'fail'))
-  );
+    ON prediction_logs (serving_snapshot_id, sample_id, snapshot_version, feature_hash);
 
   CREATE TABLE IF NOT EXISTS model_metrics (
     id BIGSERIAL PRIMARY KEY,
@@ -81,6 +73,121 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
 
   CREATE INDEX IF NOT EXISTS idx_model_metrics_evaluation_id
     ON model_metrics (evaluation_id);
+
+  CREATE TABLE IF NOT EXISTS live_model_quality_evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    computed_at DOUBLE PRECISION NOT NULL,
+    model_run_id TEXT NOT NULL,
+    threshold DOUBLE PRECISION NOT NULL,
+    window_type TEXT NOT NULL DEFAULT 'sliding_time',
+
+    cutoff_time DOUBLE PRECISION NOT NULL,
+    label_maturity_seconds DOUBLE PRECISION NOT NULL,
+    monitoring_window_seconds DOUBLE PRECISION NOT NULL,
+    window_start DOUBLE PRECISION NOT NULL,
+    window_end DOUBLE PRECISION NOT NULL,
+
+    n_decisions INTEGER NOT NULL,
+    n_samples INTEGER NOT NULL,
+    n_pass_samples INTEGER NOT NULL,
+    n_fail_samples INTEGER NOT NULL,
+    label_coverage DOUBLE PRECISION NOT NULL,
+
+    min_decisions INTEGER NOT NULL,
+    min_label_coverage DOUBLE PRECISION NOT NULL,
+    min_pass_samples INTEGER NOT NULL,
+    min_fail_samples INTEGER NOT NULL,
+    evaluation_status TEXT NOT NULL,
+
+    accuracy DOUBLE PRECISION,
+    fail_precision DOUBLE PRECISION,
+    fail_recall DOUBLE PRECISION,
+    fail_f1 DOUBLE PRECISION,
+    fail_average_precision DOUBLE PRECISION,
+    true_negative INTEGER NOT NULL,
+    false_positive INTEGER NOT NULL,
+    false_negative INTEGER NOT NULL,
+    true_positive INTEGER NOT NULL,
+
+    created_at DOUBLE PRECISION NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
+
+    CONSTRAINT chk_live_model_quality_threshold
+      CHECK (threshold >= 0.0 AND threshold <= 1.0),
+    CONSTRAINT chk_live_model_quality_window_type
+      CHECK (window_type = 'sliding_time'),
+    CONSTRAINT chk_live_model_quality_times
+      CHECK (
+        computed_at >= 0.0
+        AND computed_at < 'Infinity'::DOUBLE PRECISION
+        AND cutoff_time >= 0.0
+        AND cutoff_time < 'Infinity'::DOUBLE PRECISION
+        AND label_maturity_seconds >= 0.0
+        AND label_maturity_seconds < 'Infinity'::DOUBLE PRECISION
+        AND monitoring_window_seconds > 0.0
+        AND monitoring_window_seconds < 'Infinity'::DOUBLE PRECISION
+        AND cutoff_time >= label_maturity_seconds + monitoring_window_seconds
+        AND window_start >= 0.0
+        AND window_start < 'Infinity'::DOUBLE PRECISION
+        AND window_end >= window_start
+        AND window_end < 'Infinity'::DOUBLE PRECISION
+      ),
+    CONSTRAINT chk_live_model_quality_counts
+      CHECK (
+        n_decisions >= 0
+        AND n_samples >= 0
+        AND n_samples <= n_decisions
+        AND n_pass_samples >= 0
+        AND n_fail_samples >= 0
+        AND n_pass_samples + n_fail_samples = n_samples
+      ),
+    CONSTRAINT chk_live_model_quality_label_coverage
+      CHECK (label_coverage >= 0.0 AND label_coverage <= 1.0),
+    CONSTRAINT chk_live_model_quality_minimums
+      CHECK (
+        min_decisions > 0
+        AND min_label_coverage >= 0.0
+        AND min_label_coverage <= 1.0
+        AND min_pass_samples >= 0
+        AND min_fail_samples >= 0
+      ),
+    CONSTRAINT chk_live_model_quality_status_value
+      CHECK (
+        evaluation_status IN (
+          'ok',
+          'insufficient_decisions',
+          'insufficient_label_coverage',
+          'insufficient_fail_labels',
+          'insufficient_pass_labels'
+        )
+      ),
+    CONSTRAINT chk_live_model_quality_metric_ranges
+      CHECK (
+        (accuracy IS NULL OR (accuracy >= 0.0 AND accuracy <= 1.0))
+        AND (fail_precision IS NULL OR (fail_precision >= 0.0 AND fail_precision <= 1.0))
+        AND (fail_recall IS NULL OR (fail_recall >= 0.0 AND fail_recall <= 1.0))
+        AND (fail_f1 IS NULL OR (fail_f1 >= 0.0 AND fail_f1 <= 1.0))
+        AND (
+          fail_average_precision IS NULL
+          OR (fail_average_precision >= 0.0 AND fail_average_precision <= 1.0)
+        )
+      ),
+    CONSTRAINT chk_live_model_quality_confusion_matrix
+      CHECK (
+        true_negative >= 0
+        AND false_positive >= 0
+        AND false_negative >= 0
+        AND true_positive >= 0
+        AND true_negative + false_positive + false_negative + true_positive = n_samples
+        AND true_positive + false_negative = n_fail_samples
+        AND true_negative + false_positive = n_pass_samples
+      )
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_live_model_quality_model_cutoff
+    ON live_model_quality_evaluations (model_run_id, threshold, cutoff_time DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_live_model_quality_status_cutoff
+    ON live_model_quality_evaluations (evaluation_status, cutoff_time DESC);
 
   CREATE TABLE IF NOT EXISTS prediction_window_metrics (
     id BIGSERIAL PRIMARY KEY,
@@ -142,6 +249,7 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
     serving_snapshot_id TEXT PRIMARY KEY,
     sample_id TEXT NOT NULL,
     snapshot_version BIGINT NOT NULL,
+    feature_hash TEXT NOT NULL,
     snapshot_time DOUBLE PRECISION NOT NULL,
     window_start DOUBLE PRECISION NOT NULL,
     window_end DOUBLE PRECISION NOT NULL,
@@ -159,6 +267,8 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
       UNIQUE (sample_id, snapshot_version),
     CONSTRAINT chk_serving_feature_snapshots_version
       CHECK (snapshot_version > 0),
+    CONSTRAINT chk_serving_feature_snapshots_feature_hash
+      CHECK (feature_hash ~ '^sha256:v1:[0-9a-f]{64}$'),
     CONSTRAINT chk_serving_feature_snapshots_time
       CHECK (
         snapshot_time >= 0.0
@@ -295,77 +405,33 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
   CREATE TABLE IF NOT EXISTS label_events (
     label_event_id TEXT PRIMARY KEY,
     sample_id TEXT NOT NULL,
-    source_row_index INTEGER NOT NULL,
-    event_time DOUBLE PRECISION NOT NULL,
-    label_available_time DOUBLE PRECISION NOT NULL,
+    label_revision BIGINT NOT NULL,
+    measured_at DOUBLE PRECISION NOT NULL,
+    -- Available_at은 DB에 insert 하는 시점에 DB 시간으로 정리
+    -- 실제 SECOM Ops 시스템이 확인할 수 있는 시점이 이 시점이기 때문.
+    available_at DOUBLE PRECISION NOT NULL
+      DEFAULT EXTRACT(EPOCH FROM clock_timestamp()),
     actual_value INTEGER NOT NULL,
     actual_label TEXT NOT NULL,
-    simulation_run_id TEXT,
-    drift_segment TEXT,
-    created_at DOUBLE PRECISION NOT NULL,
-    CONSTRAINT chk_label_events_source_row_index
-      CHECK (source_row_index >= 0),
-    CONSTRAINT chk_label_events_time
-      CHECK (
-        event_time >= 0.0
-        AND label_available_time >= event_time
-      ),
+    CONSTRAINT uq_label_events_sample_revision
+      UNIQUE (sample_id, label_revision),
+    CONSTRAINT chk_label_events_revision
+      CHECK (label_revision > 0),
+    CONSTRAINT chk_label_events_measured_at
+      CHECK (measured_at >= 0.0),
+    CONSTRAINT chk_label_events_available_at
+      CHECK (available_at >= 0.0),
     CONSTRAINT chk_label_events_actual_value
       CHECK (actual_value IN (-1, 1)),
     CONSTRAINT chk_label_events_actual_label
       CHECK (actual_label IN ('pass', 'fail'))
   );
 
-  CREATE INDEX IF NOT EXISTS idx_label_events_sample_time
-    ON label_events (sample_id, label_available_time);
+  CREATE INDEX IF NOT EXISTS idx_label_events_available_at
+    ON label_events (available_at);
 
-  CREATE INDEX IF NOT EXISTS idx_label_events_run_time
-    ON label_events (simulation_run_id, label_available_time);
-
-
-  CREATE TABLE IF NOT EXISTS model_quality_windows (
-    id BIGSERIAL PRIMARY KEY,
-    window_type TEXT NOT NULL DEFAULT 'non_overlapping_labeled_predictions',
-    window_size INTEGER NOT NULL,
-    window_id INTEGER NOT NULL,
-    window_start DOUBLE PRECISION NOT NULL,
-    window_end DOUBLE PRECISION NOT NULL,
-    computed_at DOUBLE PRECISION NOT NULL,
-
-    model_name TEXT,
-    model_version TEXT,
-    model_alias TEXT,
-    model_run_id TEXT NOT NULL,
-    threshold DOUBLE PRECISION NOT NULL,
-
-    n_samples INTEGER NOT NULL,
-    n_fail_samples INTEGER NOT NULL,
-    evaluation_status TEXT NOT NULL CHECK (
-      evaluation_status IN ('ok', 'insufficient_samples', 'insufficient_fail_labels')
-    ),
-
-    accuracy DOUBLE PRECISION,
-    fail_precision DOUBLE PRECISION,
-    fail_recall DOUBLE PRECISION,
-    fail_f1 DOUBLE PRECISION,
-    pr_auc DOUBLE PRECISION,
-
-    true_negative INTEGER NOT NULL,
-    false_positive INTEGER NOT NULL,
-    false_negative INTEGER NOT NULL,
-    true_positive INTEGER NOT NULL,
-
-    created_at DOUBLE PRECISION NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-    updated_at DOUBLE PRECISION NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-
-    UNIQUE (model_run_id, threshold, window_type, window_size, window_id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_model_quality_windows_window_end
-    ON model_quality_windows (window_end);
-
-  CREATE INDEX IF NOT EXISTS idx_model_quality_windows_status
-    ON model_quality_windows (evaluation_status, window_end);
+  CREATE INDEX IF NOT EXISTS idx_label_events_sample_available_revision
+    ON label_events (sample_id, available_at, label_revision DESC);
 
 CREATE TABLE IF NOT EXISTS drift_reference_baselines (
     baseline_id TEXT PRIMARY KEY,

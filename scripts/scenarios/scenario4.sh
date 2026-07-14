@@ -28,7 +28,7 @@ cleanup() {
   trap - EXIT INT TERM
 
   echo
-  echo "Stopping scenario2 background processes..."
+  echo "Stopping scenario4 background processes..."
 
   for pid in "${pids[@]}"; do
     kill_tree "$pid" TERM
@@ -55,60 +55,63 @@ printf '{"next_predict_index": 0}\n' > ./runtime/online_workload_next_predict_st
 
 send_features() {
   local group="$1"
-  local offset="$2"
-  local drift_segment="$3"
-
-  uv run python scripts/workload/send_feature_events_from_cursor.py \
-    --feature-group "${group}" \
-    --max-samples 12000 \
-    --batch-size 60 \
-    --sleep-seconds 10 \
-    --drift-segment "${drift_segment}" \
-    --feature-offset-direction up \
-    --feature-offset-ratio "${offset}"
+  local drift_segment="$2"
 
   uv run python scripts/workload/send_feature_events_from_cursor.py \
     --feature-group "${group}" \
     --max-samples 6000 \
-    --batch-size 60 \
-    --sleep-seconds 10
+    --batch-size 200 \
+    --sleep-seconds 5
+
+  uv run python scripts/workload/send_feature_events_from_cursor.py \
+    --feature-group "${group}" \
+    --max-samples 60000 \
+    --batch-size 200 \
+    --sleep-seconds 5 \
+    --drift-segment "${drift_segment}" \
+    --reflect-all-features-around-median
+
+  uv run python scripts/workload/send_feature_events_from_cursor.py \
+    --feature-group "${group}" \
+    --max-samples 6000 \
+    --batch-size 200 \
+    --sleep-seconds 5
 }
 
 send_labels() {
   sleep 60
   uv run python scripts/workload/send_label_events_from_cursor.py \
-    --max-samples 18000 \
-    --batch-size 60 \
-    --sleep-seconds 10
+    --max-samples 72000 \
+    --batch-size 200 \
+    --sleep-seconds 5
 }
 
 send_predicts() {
   sleep 30
   uv run python scripts/workload/request_predictions_from_cursor.py \
-    --max-samples 18000 \
-    --batch-size 60 \
-    --sleep-seconds 10 \
-    --concurrency 1 \
+    --max-samples 72000 \
+    --batch-size 200 \
+    --sleep-seconds 9 \
+    --concurrency 100 \
     --print-failures
 }
 
-send_features early 0.4 "scenario2" &
+send_features early "scenario4" &
 pids+=("$!")
 
-send_features middle 0.6 "scenario2" &
+send_features middle "scenario4" &
 pids+=("$!")
 
-send_features late 0.2 "scenario2" &
+send_features late "scenario4" &
 pids+=("$!")
 
 send_labels &
 pids+=("$!")
 
-sleep 30
 send_predicts &
 pids+=("$!")
 
-echo "Started scenario2 background processes:"
+echo "Started scenario4 background processes:"
 echo "  early features pid: ${pids[0]}"
 echo "  middle features pid: ${pids[1]}"
 echo "  late features pid: ${pids[2]}"

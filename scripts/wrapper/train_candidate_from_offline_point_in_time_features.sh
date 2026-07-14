@@ -2,8 +2,9 @@
 set -euo pipefail
 
 TRAINER_SCRIPT=""
-POINT_TIME_START=""
-POINT_TIME=""
+COHORT_START_TIME=""
+CUTOFF_TIME=""
+LABEL_MATURITY_SECONDS=""
 TRACKING_URI=""
 MODEL_NAME=""
 MODEL_ALIAS=""
@@ -13,21 +14,21 @@ TRAINING_JOB_ID=""
 SIMULATION_RUN_ID=""
 DRIFT_SEGMENT=""
 MIN_SAMPLES="500"
+MIN_LABEL_COVERAGE="0.95"
 MIN_FAIL_SAMPLES="20"
 MIN_PASS_SAMPLES="20"
-TEST_SIZE="0.2"
 RANDOM_STATE="42"
 N_ESTIMATORS="100,300,500,700"
 MIN_SAMPLES_LEAF="1,3,5,7"
 THRESHOLDS="0.1,0.2,0.3,0.4,0.5"
-REFIT_ON_ALL_DATA="False"
 DRY_RUN="False"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --trainer-script) TRAINER_SCRIPT="${2:-}"; shift 2 ;;
-    --point-time-start) POINT_TIME_START="${2:-}"; shift 2 ;;
-    --point-time) POINT_TIME="${2:-}"; shift 2 ;;
+    --cohort-start-time) COHORT_START_TIME="${2:-}"; shift 2 ;;
+    --cutoff-time) CUTOFF_TIME="${2:-}"; shift 2 ;;
+    --label-maturity-seconds) LABEL_MATURITY_SECONDS="${2:-}"; shift 2 ;;
     --tracking-uri) TRACKING_URI="${2:-}"; shift 2 ;;
     --model-name) MODEL_NAME="${2:-}"; shift 2 ;;
     --model-alias) MODEL_ALIAS="${2:-}"; shift 2 ;;
@@ -37,22 +38,13 @@ while [ "$#" -gt 0 ]; do
     --simulation-run-id) SIMULATION_RUN_ID="${2:-}"; shift 2 ;;
     --drift-segment) DRIFT_SEGMENT="${2:-}"; shift 2 ;;
     --min-samples) MIN_SAMPLES="${2:-}"; shift 2 ;;
+    --min-label-coverage) MIN_LABEL_COVERAGE="${2:-}"; shift 2 ;;
     --min-fail-samples) MIN_FAIL_SAMPLES="${2:-}"; shift 2 ;;
     --min-pass-samples) MIN_PASS_SAMPLES="${2:-}"; shift 2 ;;
-    --test-size) TEST_SIZE="${2:-}"; shift 2 ;;
     --random-state) RANDOM_STATE="${2:-}"; shift 2 ;;
     --n-estimators) N_ESTIMATORS="${2:-}"; shift 2 ;;
     --min-samples-leaf) MIN_SAMPLES_LEAF="${2:-}"; shift 2 ;;
     --thresholds) THRESHOLDS="${2:-}"; shift 2 ;;
-    --refit-on-all-data)
-      if [ "$#" -ge 2 ] && [ "${2#--}" = "$2" ]; then
-        REFIT_ON_ALL_DATA="${2}"
-        shift 2
-      else
-        REFIT_ON_ALL_DATA="True"
-        shift 1
-      fi
-      ;;
     --dry-run)
       if [ "$#" -ge 2 ] && [ "${2#--}" = "$2" ]; then
         DRY_RUN="${2}"
@@ -139,6 +131,28 @@ print(f"{parsed:.6f}")
 ' "${value}" "${name}"
 }
 
+normalize_non_negative_seconds() {
+  local value="$1"
+  local name="$2"
+  "${PYTHON}" -c '
+import math
+import sys
+
+raw_value = sys.argv[1].strip()
+name = sys.argv[2]
+
+try:
+    parsed = float(raw_value)
+except ValueError as exc:
+    raise SystemExit(f"{name} must be numeric seconds: {raw_value}") from exc
+
+if parsed < 0.0 or not math.isfinite(parsed):
+    raise SystemExit(f"{name} must be finite and >= 0")
+
+print(f"{parsed:.6f}")
+' "${value}" "${name}"
+}
+
 resolve_trainer_script() {
   if ! is_blank "${TRAINER_SCRIPT}"; then
     if [ -f "${TRAINER_SCRIPT}" ]; then
@@ -164,45 +178,65 @@ resolve_trainer_script() {
 
 PYTHON="$(resolve_python)"
 
-if is_blank "${POINT_TIME_START}"; then
-  echo "point_time_start is required" >&2
+if is_blank "${COHORT_START_TIME}"; then
+  echo "cohort_start_time is required" >&2
   exit 1
 fi
 
-if is_blank "${POINT_TIME}"; then
-  echo "point_time is required" >&2
+if is_blank "${CUTOFF_TIME}"; then
+  echo "cutoff_time is required" >&2
   exit 1
 fi
 
-POINT_TIME_START="$(normalize_epoch_time "${POINT_TIME_START}" "point_time_start")"
-POINT_TIME="$(normalize_epoch_time "${POINT_TIME}" "point_time")"
+if is_blank "${LABEL_MATURITY_SECONDS}"; then
+  echo "label_maturity_seconds is required" >&2
+  exit 1
+fi
+
+COHORT_START_TIME="$(normalize_epoch_time "${COHORT_START_TIME}" "cohort_start_time")"
+CUTOFF_TIME="$(normalize_epoch_time "${CUTOFF_TIME}" "cutoff_time")"
+LABEL_MATURITY_SECONDS="$(
+  normalize_non_negative_seconds "${LABEL_MATURITY_SECONDS}" "label_maturity_seconds"
+)"
 
 "${PYTHON}" -c '
 import math
 import sys
 
-point_time_start = float(sys.argv[1])
-point_time = float(sys.argv[2])
+cohort_start_time = float(sys.argv[1])
+cutoff_time = float(sys.argv[2])
+label_maturity_seconds = float(sys.argv[3])
+cohort_end_time = cutoff_time - label_maturity_seconds
 
-if point_time_start < 0.0 or not math.isfinite(point_time_start):
-    raise SystemExit("point_time_start must be finite and >= 0")
-if point_time <= point_time_start or not math.isfinite(point_time):
-    raise SystemExit("point_time must be finite and greater than point_time_start")
-' "${POINT_TIME_START}" "${POINT_TIME}"
+if cohort_start_time < 0.0 or not math.isfinite(cohort_start_time):
+    raise SystemExit("cohort_start_time must be finite and >= 0")
+if cutoff_time < 0.0 or not math.isfinite(cutoff_time):
+    raise SystemExit("cutoff_time must be finite and >= 0")
+if label_maturity_seconds < 0.0 or not math.isfinite(label_maturity_seconds):
+    raise SystemExit("label_maturity_seconds must be finite and >= 0")
+if cohort_end_time < cohort_start_time:
+    raise SystemExit(
+        "cohort_start_time must be <= cutoff_time - label_maturity_seconds"
+    )
+' "${COHORT_START_TIME}" "${CUTOFF_TIME}" "${LABEL_MATURITY_SECONDS}"
+
+RUN_TOKEN=""
+if is_blank "${CANDIDATE_GROUP}" || is_blank "${TRAINING_JOB_ID}"; then
+  RUN_TOKEN="$("${PYTHON}" -c '
+from datetime import datetime, timezone
+from uuid import uuid4
+
+timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+print(f"{timestamp}_{uuid4().hex[:8]}")
+')"
+fi
 
 if is_blank "${CANDIDATE_GROUP}"; then
-  CANDIDATE_GROUP="$("${PYTHON}" -c '
-from datetime import datetime, timezone
-import sys
-
-point_time = float(sys.argv[1])
-suffix = datetime.fromtimestamp(point_time, tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-print(f"airflow_retrain_{suffix}")
-' "${POINT_TIME}")"
+  CANDIDATE_GROUP="retrain_${RUN_TOKEN}"
 fi
 
 if is_blank "${TRAINING_JOB_ID}"; then
-  TRAINING_JOB_ID="${CANDIDATE_GROUP}"
+  TRAINING_JOB_ID="train_${RUN_TOKEN}"
 fi
 
 TRAINER_SCRIPT="$(resolve_trainer_script)"
@@ -210,14 +244,15 @@ TRAINER_SCRIPT="$(resolve_trainer_script)"
 COMMAND=(
   "${PYTHON}"
   "${TRAINER_SCRIPT}"
-  --point-time-start "${POINT_TIME_START}"
-  --point-time "${POINT_TIME}"
+  --cohort-start-time "${COHORT_START_TIME}"
+  --cutoff-time "${CUTOFF_TIME}"
+  --label-maturity-seconds "${LABEL_MATURITY_SECONDS}"
   --candidate-group "${CANDIDATE_GROUP}"
   --training-job-id "${TRAINING_JOB_ID}"
   --min-samples "${MIN_SAMPLES}"
+  --min-label-coverage "${MIN_LABEL_COVERAGE}"
   --min-fail-samples "${MIN_FAIL_SAMPLES}"
   --min-pass-samples "${MIN_PASS_SAMPLES}"
-  --test-size "${TEST_SIZE}"
   --random-state "${RANDOM_STATE}"
   --n-estimators "${N_ESTIMATORS}"
   --min-samples-leaf "${MIN_SAMPLES_LEAF}"
@@ -239,14 +274,10 @@ append_optional --model-role "${MODEL_ROLE}"
 append_optional --simulation-run-id "${SIMULATION_RUN_ID}"
 append_optional --drift-segment "${DRIFT_SEGMENT}"
 
-if is_truthy "${REFIT_ON_ALL_DATA}"; then
-  COMMAND+=(--refit-on-all-data)
-fi
-
 if is_truthy "${DRY_RUN}"; then
   COMMAND+=(--dry-run)
 fi
 
-echo "offline_point_time_candidate_retraining_command trainer_script=${TRAINER_SCRIPT} point_time_start=${POINT_TIME_START} point_time=${POINT_TIME} candidate_group=${CANDIDATE_GROUP} training_job_id=${TRAINING_JOB_ID}"
+echo "serving_snapshot_candidate_retraining_command trainer_script=${TRAINER_SCRIPT} cohort_start_time=${COHORT_START_TIME} cutoff_time=${CUTOFF_TIME} label_maturity_seconds=${LABEL_MATURITY_SECONDS} candidate_group=${CANDIDATE_GROUP} training_job_id=${TRAINING_JOB_ID}"
 
 "${COMMAND[@]}"

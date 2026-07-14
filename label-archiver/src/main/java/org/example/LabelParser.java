@@ -35,6 +35,7 @@ final class LabelParser {
     }
 
     private static LabelRow validateLabelEvent(JsonNode event, String kafkaKey) {
+        String labelEventId = requiredText(event, "label_event_id");
         String sampleId = requiredText(event, "sample_id");
 
         if (!SAMPLE_ID_PATTERN.matcher(sampleId).matches()) {
@@ -47,9 +48,21 @@ final class LabelParser {
             );
         }
 
+        long labelRevision = requiredLong(event, "label_revision");
+        double measuredAt = requiredNumber(event, "measured_at");
+
+        if (labelRevision <= 0) {
+            throw new IllegalArgumentException(
+                "label_revision must be > 0: " + labelRevision
+            );
+        }
+
+        if (measuredAt < 0.0) {
+            throw new IllegalArgumentException("measured_at must be >= 0: " + measuredAt);
+        }
+
         int actualValue = requiredInt(event, "actual_value");
         String actualLabel = requiredText(event, "actual_label");
-        double labeledAt = requiredNumber(event, "label_available_time");
 
         if (actualValue != -1 && actualValue != 1) {
             throw new IllegalArgumentException("actual_value must be -1 or 1: " + actualValue);
@@ -62,7 +75,14 @@ final class LabelParser {
             );
         }
 
-        return new LabelRow(sampleId, actualValue, actualLabel, labeledAt);
+        return new LabelRow(
+            labelEventId,
+            sampleId,
+            labelRevision,
+            measuredAt,
+            actualValue,
+            actualLabel
+        );
     }
 
     private static String requiredText(JsonNode node, String fieldName) {
@@ -79,6 +99,16 @@ final class LabelParser {
             throw new IllegalArgumentException("required integer field missing or invalid: " + fieldName);
         }
         return value.asInt();
+    }
+
+    private static long requiredLong(JsonNode node, String fieldName) {
+        JsonNode value = node.get(fieldName);
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()) {
+            throw new IllegalArgumentException(
+                "required integer field missing or invalid: " + fieldName
+            );
+        }
+        return value.asLong();
     }
 
     private static double requiredNumber(JsonNode node, String fieldName) {

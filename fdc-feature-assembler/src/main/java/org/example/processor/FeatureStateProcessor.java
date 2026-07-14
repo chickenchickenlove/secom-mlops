@@ -137,6 +137,7 @@ public final class FeatureStateProcessor implements Processor<String, String, St
         output.put("missing_count", missingCount);
         output.put("is_complete", isComplete);
         output.set("features", canonicalFeatures);
+        output.put("feature_hash", FeatureVectorHash.compute(canonicalFeatures));
         output.put("source_event_count", sourceEventCount);
         output.put("snapshot_version", snapshotVersion);
         putIfPresent(output, state, "last_feature_group");

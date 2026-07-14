@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,10 +25,14 @@ class InvalidOnlineFeatureSnapshot(ValueError):
     pass
 
 
+FEATURE_HASH_PATTERN = re.compile(r"^sha256:v1:[0-9a-f]{64}$")
+
+
 @dataclass(frozen=True)
 class OnlineFeatureSnapshot:
     serving_snapshot_id: str
     snapshot_version: int
+    feature_hash: str
     sample_id: str
     snapshot_time: float
     snapshot_status: str
@@ -115,6 +120,7 @@ def _parse_snapshot(raw: str, expected_sample_id: str) -> OnlineFeatureSnapshot:
     serving_snapshot_id = _required_str(payload, "serving_snapshot_id")
     source_event_count = _required_int(payload, "source_event_count")
     snapshot_version = _required_int(payload, "snapshot_version")
+    feature_hash = _required_str(payload, "feature_hash")
     snapshot_time = _required_float(payload, "snapshot_time")
     snapshot_status = _required_str(payload, "snapshot_status")
     feature_count = _required_int(payload, "feature_count")
@@ -132,6 +138,9 @@ def _parse_snapshot(raw: str, expected_sample_id: str) -> OnlineFeatureSnapshot:
             "snapshot_version must match source_event_count: "
             f"snapshot_version={snapshot_version} source_event_count={source_event_count}"
         )
+
+    if not FEATURE_HASH_PATTERN.fullmatch(feature_hash):
+        raise InvalidOnlineFeatureSnapshot(f"invalid feature_hash: {feature_hash}")
 
     if snapshot_status not in {"partial", "complete"}:
         raise InvalidOnlineFeatureSnapshot(f"invalid snapshot_status: {snapshot_status}")
@@ -173,6 +182,7 @@ def _parse_snapshot(raw: str, expected_sample_id: str) -> OnlineFeatureSnapshot:
     return OnlineFeatureSnapshot(
         serving_snapshot_id=serving_snapshot_id,
         snapshot_version=snapshot_version,
+        feature_hash=feature_hash,
         sample_id=sample_id,
         snapshot_time=snapshot_time,
         snapshot_status=snapshot_status,

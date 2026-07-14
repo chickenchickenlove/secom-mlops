@@ -1,7 +1,18 @@
 # label-archiver
 
-Consumes label events from Kafka and materializes them into PostgreSQL
-`actual_labels`.
+Consumes label events from Kafka and appends them to PostgreSQL
+`label_events`.
+
+Each label event contains `label_event_id`, `sample_id`, `label_revision`,
+`measured_at`, `actual_value`, and `actual_label`. PostgreSQL assigns
+`available_at` when the label is first inserted.
+
+Labels are stored as an append-only correction history. A higher
+`label_revision` represents a newer authoritative label for the same sample.
+Replaying the same `label_event_id` with the same payload is idempotent, while
+a conflicting payload is treated as an error.
+
+The Kafka offset is committed only after the PostgreSQL transaction succeeds.
 
 This service is configured with environment variables. CLI arguments are not
 supported.
