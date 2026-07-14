@@ -43,7 +43,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
 RANDOM_STATE = 42
-TEST_SIZE = 0.2
+MAX_DEVELOPMENT_SAMPLES = 1000
+VALIDATION_SIZE = 0.2
+DEVELOPMENT_SAMPLE_SELECTION = "first_raw_rows_in_source_order"
 POSITIVE_CLASS = 1
 NEGATIVE_CLASS = -1
 
@@ -98,11 +100,11 @@ def build_model(n_estimators, min_samples_leaf):
     )
 
 
-def evaluate(y_test, fail_probability, threshold):
+def evaluate(y_true, fail_probability, threshold):
     y_pred = np.where(fail_probability >= threshold, POSITIVE_CLASS, NEGATIVE_CLASS)
 
     report = classification_report(
-        y_test,
+        y_true,
         y_pred,
         labels=[NEGATIVE_CLASS, POSITIVE_CLASS],
         output_dict=True,
@@ -110,7 +112,7 @@ def evaluate(y_test, fail_probability, threshold):
     )
 
     matrix = confusion_matrix(
-        y_test,
+        y_true,
         y_pred,
         labels=[NEGATIVE_CLASS, POSITIVE_CLASS],
     )
@@ -118,8 +120,8 @@ def evaluate(y_test, fail_probability, threshold):
     tn, fp, fn, tp = matrix.ravel()
 
     return {
-        "accuracy": float(accuracy_score(y_test, y_pred)),
-        "balanced_accuracy": float(balanced_accuracy_score(y_test, y_pred)),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
         "precision_1": float(report["1"]["precision"]),
         "recall_1": float(report["1"]["recall"]),
         "f1_1": float(report["1"]["f1-score"]),
@@ -211,11 +213,22 @@ def main():
 
     X, y = load_data()
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        stratify=y,
-        test_size=TEST_SIZE,
+    if len(X) < MAX_DEVELOPMENT_SAMPLES:
+        raise ValueError(
+            "not enough raw rows for champion development cohort: "
+            f"required={MAX_DEVELOPMENT_SAMPLES} actual={len(X)}"
+        )
+
+    # The raw SECOM rows are time-ordered. Keep the first 1,000 rows as the
+    # fixed Champion development cohort so the remaining rows stay outside it.
+    X_development = X.iloc[:MAX_DEVELOPMENT_SAMPLES].copy()
+    y_development = y.iloc[:MAX_DEVELOPMENT_SAMPLES].copy()
+
+    X_train, X_validation, y_train, y_validation = train_test_split(
+        X_development,
+        y_development,
+        stratify=y_development,
+        test_size=VALIDATION_SIZE,
         random_state=RANDOM_STATE,
     )
 
@@ -230,11 +243,13 @@ def main():
 
             class_order = model.named_steps["model"].classes_
             positive_index = list(class_order).index(POSITIVE_CLASS)
-            fail_probability = model.predict_proba(X_test)[:, positive_index]
+            fail_probability = model.predict_proba(X_validation)[
+                :, positive_index
+            ]
 
             pr_auc = float(
                 average_precision_score(
-                    y_test,
+                    y_validation,
                     fail_probability,
                     pos_label=POSITIVE_CLASS,
                 )
@@ -242,7 +257,7 @@ def main():
 
             for threshold in [0.1, 0.2, 0.3, 0.4, 0.5]:
                 metrics, report, matrix = evaluate(
-                    y_test=y_test,
+                    y_true=y_validation,
                     fail_probability=fail_probability,
                     threshold=threshold,
                 )
@@ -254,7 +269,9 @@ def main():
                     "min_samples_leaf": min_samples_leaf,
                     "class_weight": "balanced",
                     "random_state": RANDOM_STATE,
-                    "test_size": TEST_SIZE,
+                    "development_sample_limit": MAX_DEVELOPMENT_SAMPLES,
+                    "development_sample_selection": DEVELOPMENT_SAMPLE_SELECTION,
+                    "validation_size": VALIDATION_SIZE,
                     "stratify": True,
                     "imputer_strategy": "median",
                     "threshold": threshold,
@@ -288,7 +305,7 @@ def main():
         n_estimators=int(best_row["n_estimators"]),
         min_samples_leaf=int(best_row["min_samples_leaf"]),
     )
-    best_model.fit(X_train, y_train)
+    best_model.fit(X_development, y_development)
 
     with mlflow.start_run(run_name="selected_random_forest_baseline") as run:
         mlflow.set_tag("project", "secom-fail-detection")
@@ -306,11 +323,15 @@ def main():
             "min_samples_leaf": int(best_row["min_samples_leaf"]),
             "class_weight": "balanced",
             "random_state": RANDOM_STATE,
-            "test_size": TEST_SIZE,
+            "development_sample_limit": MAX_DEVELOPMENT_SAMPLES,
+            "development_sample_selection": DEVELOPMENT_SAMPLE_SELECTION,
+            "validation_size": VALIDATION_SIZE,
             "stratify": True,
             "imputer_strategy": "median",
             "threshold": float(best_row["threshold"]),
             "positive_class": POSITIVE_CLASS,
+            "final_fit_scope": "complete_development_cohort",
+            "final_evaluation_source": "serving_prediction_decision_gate",
         }
 
         selected_metrics = {
@@ -324,6 +345,20 @@ def main():
             "fp": float(best_row["fp"]),
             "fn": float(best_row["fn"]),
             "tp": float(best_row["tp"]),
+            "validation_accuracy": float(best_row["accuracy"]),
+            "validation_balanced_accuracy": float(best_row["balanced_accuracy"]),
+            "validation_precision_1": float(best_row["precision_1"]),
+            "validation_recall_1": float(best_row["recall_1"]),
+            "validation_f1_1": float(best_row["f1_1"]),
+            "validation_pr_auc": float(best_row["pr_auc"]),
+            "training_sample_count": float(len(y_train)),
+            "validation_sample_count": float(len(y_validation)),
+            "final_fit_sample_count": float(len(y_development)),
+            "training_fail_count": float((y_train == POSITIVE_CLASS).sum()),
+            "validation_fail_count": float((y_validation == POSITIVE_CLASS).sum()),
+            "final_fit_fail_count": float(
+                (y_development == POSITIVE_CLASS).sum()
+            ),
         }
 
         mlflow.log_params(selected_params)
@@ -337,7 +372,7 @@ def main():
             positive_class=POSITIVE_CLASS,
         )
 
-        input_example = X_train.head(5).copy()
+        input_example = X_development.head(5).copy()
         output_example = pyfunc_model.predict(None, input_example)
         signature = infer_signature(input_example, output_example)
 
@@ -372,6 +407,9 @@ def main():
             "registered_model_alias": MODEL_REGISTRY_ALIAS,
             "source_run_id": run.info.run_id,
             "train_source": MODEL_TRAIN_SOURCE,
+            "development_sample_selection": DEVELOPMENT_SAMPLE_SELECTION,
+            "development_sample_count": str(len(y_development)),
+            "final_fit_sample_count": str(len(y_development)),
         }
 
         if MODEL_VERSION_ROLE:

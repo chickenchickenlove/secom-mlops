@@ -38,7 +38,7 @@ with DAG(
             ),
             "min_samples": Param(500, type="integer", minimum=1),
             "retire_existing_active": Param(True, type="boolean"),
-            "dry_run": Param(True, type="boolean"),
+            "dry_run": Param(False, type="boolean"),
         },
         tags=["monitoring", "drift", "fixed-reference"],
 ) as dag:

@@ -69,7 +69,11 @@ send_features() {
     --batch-size 200 \
     --sleep-seconds 5 \
     --drift-segment "${drift_segment}" \
-    --feature-offset-action "59,+,100.0,1"
+    --feature-offset-action "59,+,100.0,1" \
+    --feature-offset-action "103,+,0.2,1" \
+    --feature-offset-action "33,+,10.0,1" \
+    --feature-offset-action "31,+,5.0,1" \
+    --feature-offset-action "477,+,80.0,1"
 
   uv run python scripts/workload/send_feature_events_from_cursor.py \
     --feature-group "${group}" \
@@ -79,14 +83,15 @@ send_features() {
 }
 
 send_labels() {
+  sleep 60
   uv run python scripts/workload/send_label_events_from_cursor.py \
     --max-samples 72000 \
     --batch-size 200 \
-    --sleep-seconds 6 \
-    --label-delay-seconds 300
+    --sleep-seconds 5
 }
 
 send_predicts() {
+  sleep 30
   uv run python scripts/workload/request_predictions_from_cursor.py \
     --max-samples 72000 \
     --batch-size 200 \
@@ -107,11 +112,10 @@ pids+=("$!")
 send_labels &
 pids+=("$!")
 
-sleep 30
 send_predicts &
 pids+=("$!")
 
-echo "Started scenario2 background processes:"
+echo "Started scenario3 background processes:"
 echo "  early features pid: ${pids[0]}"
 echo "  middle features pid: ${pids[1]}"
 echo "  late features pid: ${pids[2]}"

@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class PredictionLogParserTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String FEATURE_HASH = "sha256:v1:" + "0".repeat(64);
 
     @Test
     void parsesValidPredictionLogWithoutFeatures() {
@@ -20,6 +21,7 @@ class PredictionLogParserTest {
         assertEquals("secom-0000001", row.sampleId());
         assertEquals("state:secom-0000001:1000:3", row.servingSnapshotId());
         assertEquals(3L, row.snapshotVersion());
+        assertEquals(FEATURE_HASH, row.featureHash());
         assertEquals("run-001", row.modelRunId());
         assertEquals("champion", row.modelAlias());
         assertEquals("online", row.runtimeSlot());
@@ -161,6 +163,26 @@ class PredictionLogParserTest {
     }
 
     @Test
+    void rejectsMissingOrInvalidFeatureHash() {
+        ObjectNode missingHash = validEvent();
+        missingHash.remove("feature_hash");
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> PredictionLogParser.parse(missingHash.toString(), null)
+        );
+
+        ObjectNode invalidHash = validEvent();
+        invalidHash.put("feature_hash", "sha256:v1:not-a-hash");
+
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> PredictionLogParser.parse(invalidHash.toString(), null)
+        );
+
+        assertEquals("invalid feature_hash: sha256:v1:not-a-hash", error.getMessage());
+    }
+
+    @Test
     void acceptsSnapshotVersionLargerThanIntegerRange() {
         ObjectNode event = validEvent();
         event.put("snapshot_version", 3_000_000_000L);
@@ -190,6 +212,7 @@ class PredictionLogParserTest {
         event.put("sample_id", "secom-0000001");
         event.put("serving_snapshot_id", "state:secom-0000001:1000:3");
         event.put("snapshot_version", 3L);
+        event.put("feature_hash", FEATURE_HASH);
         event.put("model_run_id", "run-001");
         event.put("model_name", "secom-xgb");
         event.put("model_version", "1");

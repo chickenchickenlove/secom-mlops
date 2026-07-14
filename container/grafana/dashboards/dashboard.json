@@ -561,7 +561,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  COUNT(*) AS total_predictions,\n  COUNT(a.sample_id) AS labeled_predictions,\n  ROUND((COUNT(a.sample_id)::numeric / NULLIF(COUNT(*), 0)), 4) AS label_coverage,\n  ROUND(\n    percentile_cont(0.50) WITHIN GROUP (ORDER BY (a.labeled_at - p.predicted_at))\n      FILTER (WHERE a.labeled_at IS NOT NULL)::numeric,\n    2\n  ) AS label_lag_p50_seconds,\n  ROUND(\n    percentile_cont(0.95) WITHIN GROUP (ORDER BY (a.labeled_at - p.predicted_at))\n      FILTER (WHERE a.labeled_at IS NOT NULL)::numeric,\n    2\n  ) AS label_lag_p95_seconds\nFROM prediction_logs p\nLEFT JOIN actual_labels a\n  ON a.sample_id = p.sample_id\nWHERE p.predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds};",
+          "rawSql": "WITH evaluation_parameters AS (\n  SELECT\n    ${__from:date:seconds}::DOUBLE PRECISION AS window_start,\n    ${__to:date:seconds}::DOUBLE PRECISION AS cutoff_time\n),\ndecision_cohort AS (\n  SELECT\n    p.prediction_id,\n    p.sample_id,\n    p.model_run_id,\n    p.threshold,\n    p.serving_snapshot_id,\n    p.snapshot_version,\n    p.predicted_at\n  FROM prediction_logs p\n  CROSS JOIN evaluation_parameters e\n  WHERE p.predicted_at >= e.window_start\n    AND p.predicted_at < e.cutoff_time\n    AND NOT EXISTS (\n      SELECT 1\n      FROM prediction_logs earlier\n      WHERE earlier.model_run_id = p.model_run_id\n        AND earlier.threshold = p.threshold\n        AND earlier.sample_id = p.sample_id\n        AND earlier.serving_snapshot_id = p.serving_snapshot_id\n        AND earlier.snapshot_version = p.snapshot_version\n        AND (\n          earlier.predicted_at < p.predicted_at\n          OR (\n            earlier.predicted_at = p.predicted_at\n            AND earlier.prediction_id < p.prediction_id\n          )\n        )\n    )\n),\ncohort_samples AS (\n  SELECT DISTINCT sample_id\n  FROM decision_cohort\n),\nfirst_label_arrivals AS (\n  SELECT\n    le.sample_id,\n    MIN(le.available_at) AS first_label_available_at\n  FROM label_events le\n  JOIN cohort_samples c\n    ON c.sample_id = le.sample_id\n  CROSS JOIN evaluation_parameters e\n  WHERE le.available_at <= e.cutoff_time\n  GROUP BY le.sample_id\n)\nSELECT\n  COUNT(*) AS total_decisions,\n  COUNT(f.sample_id) AS labeled_decisions,\n  ROUND(\n    COUNT(f.sample_id)::NUMERIC / NULLIF(COUNT(*), 0),\n    4\n  ) AS label_coverage,\n  ROUND(\n    (\n      percentile_cont(0.50) WITHIN GROUP (\n        ORDER BY f.first_label_available_at - d.predicted_at\n      ) FILTER (WHERE f.sample_id IS NOT NULL)\n    )::NUMERIC,\n    2\n  ) AS first_label_lag_p50_seconds,\n  ROUND(\n    (\n      percentile_cont(0.95) WITHIN GROUP (\n        ORDER BY f.first_label_available_at - d.predicted_at\n      ) FILTER (WHERE f.sample_id IS NOT NULL)\n    )::NUMERIC,\n    2\n  ) AS first_label_lag_p95_seconds\nFROM decision_cohort d\nLEFT JOIN first_label_arrivals f\n  ON f.sample_id = d.sample_id;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -582,7 +582,7 @@
           }
         }
       ],
-      "title": "Label Coverage / Label Lag",
+      "title": "Decision Label Coverage / First Label Lag",
       "type": "table",
       "collapsed": false
     },
@@ -651,7 +651,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  m.n_samples AS evaluated_samples,\n  m.n_fail_samples AS evaluated_fail_samples\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.metric_name = 'fail_f1'\nORDER BY m.computed_at DESC\nLIMIT 1;",
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  q.n_decisions,\n  q.n_samples AS labeled_decisions,\n  q.label_coverage,\n  q.evaluation_status\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nORDER BY q.cutoff_time DESC, q.evaluation_id DESC\nLIMIT 1;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -730,7 +730,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  m.metric_value AS fail_f1\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.metric_name = 'fail_f1'\nORDER BY m.computed_at DESC\nLIMIT 1;",
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  q.fail_f1\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nORDER BY q.cutoff_time DESC, q.evaluation_id DESC\nLIMIT 1;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -842,7 +842,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_f1'\nORDER BY time, metric;",
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'fail_f1' AS metric,\n  q.fail_f1 AS value\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -954,7 +954,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_recall'\nORDER BY time, metric;",
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'fail_recall' AS metric,\n  q.fail_recall AS value\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1066,7 +1066,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN active_release r\n  ON m.model_run_id = r.active_model_run_id\n AND m.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_precision'\nORDER BY time, metric;",
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'fail_precision' AS metric,\n  q.fail_precision AS value\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1149,7 +1149,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nlatest_eval AS (\n  SELECT m.evaluation_id\n  FROM model_metrics m\n  JOIN active_release r\n    ON m.model_run_id = r.active_model_run_id\n   AND m.threshold IS NOT DISTINCT FROM r.active_threshold\n  WHERE m.metric_name = 'fail_f1'\n  ORDER BY m.computed_at DESC\n  LIMIT 1\n)\nSELECT\n  m.metric_name,\n  m.metric_value,\n  m.n_samples,\n  m.n_fail_samples,\n  m.model_run_id,\n  m.threshold,\n  to_timestamp(m.computed_at) AS computed_time\nFROM model_metrics m\nJOIN latest_eval e\n  ON e.evaluation_id = m.evaluation_id\nWHERE m.metric_name IN (\n  'accuracy',\n  'fail_precision',\n  'fail_recall',\n  'fail_f1',\n  'pr_auc'\n)\nORDER BY CASE m.metric_name\n  WHEN 'fail_f1' THEN 1\n  WHEN 'fail_recall' THEN 2\n  WHEN 'fail_precision' THEN 3\n  WHEN 'pr_auc' THEN 4\n  WHEN 'accuracy' THEN 5\n  ELSE 99\nEND;",
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  q.evaluation_status,\n  to_timestamp(q.cutoff_time) AS cutoff_time,\n  to_timestamp(q.window_start) AS window_start,\n  to_timestamp(q.window_end) AS window_end,\n  q.label_maturity_seconds,\n  q.monitoring_window_seconds,\n  q.n_decisions,\n  q.n_samples AS labeled_decisions,\n  q.n_pass_samples,\n  q.n_fail_samples,\n  q.label_coverage,\n  q.accuracy,\n  q.fail_precision,\n  q.fail_recall,\n  q.fail_f1,\n  q.fail_average_precision,\n  q.model_run_id,\n  q.threshold\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nORDER BY q.cutoff_time DESC, q.evaluation_id DESC\nLIMIT 1;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1256,7 +1256,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nlatest_eval AS (\n  SELECT m.evaluation_id\n  FROM model_metrics m\n  JOIN active_release r\n    ON m.model_run_id = r.active_model_run_id\n   AND m.threshold IS NOT DISTINCT FROM r.active_threshold\n  WHERE m.metric_name = 'fail_f1'\n  ORDER BY m.computed_at DESC\n  LIMIT 1\n)\nSELECT\n  m.metric_name,\n  m.metric_value::INTEGER AS count\nFROM model_metrics m\nJOIN latest_eval e\n  ON e.evaluation_id = m.evaluation_id\nWHERE m.metric_name IN (\n  'true_negative',\n  'false_positive',\n  'false_negative',\n  'true_positive'\n)\nORDER BY CASE m.metric_name\n  WHEN 'true_negative' THEN 1\n  WHEN 'false_positive' THEN 2\n  WHEN 'false_negative' THEN 3\n  WHEN 'true_positive' THEN 4\nEND;",
+          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nlatest_eval AS (\n  SELECT q.*\n  FROM live_model_quality_evaluations q\n  JOIN active_release r\n    ON q.model_run_id = r.active_model_run_id\n   AND q.threshold IS NOT DISTINCT FROM r.active_threshold\n  ORDER BY q.cutoff_time DESC, q.evaluation_id DESC\n  LIMIT 1\n)\nSELECT matrix.bucket, matrix.count\nFROM latest_eval q\nCROSS JOIN LATERAL (\n  VALUES\n    (1, 'true_negative', q.true_negative),\n    (2, 'false_positive', q.false_positive),\n    (3, 'false_negative', q.false_negative),\n    (4, 'true_positive', q.true_positive)\n) AS matrix(sort_order, bucket, count)\nORDER BY matrix.sort_order;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1368,7 +1368,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\npredicted AS (\n  SELECT\n    floor(p.predicted_at / 60) * 60 AS bucket,\n    SUM(CASE WHEN p.predicted_value = 1 THEN 1 ELSE 0 END)::DOUBLE PRECISION\n      / NULLIF(COUNT(*), 0) AS predicted_fail_ratio\n  FROM prediction_logs p\n  JOIN active_release r\n    ON p.model_run_id = r.active_model_run_id\n   AND p.threshold IS NOT DISTINCT FROM r.active_threshold\n  WHERE p.predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND p.runtime_slot = 'release'\n  GROUP BY 1\n),\nactual AS (\n  SELECT\n    floor(p.predicted_at / 60) * 60 AS bucket,\n    SUM(CASE WHEN a.actual_value = 1 THEN 1 ELSE 0 END)::DOUBLE PRECISION\n      / NULLIF(COUNT(*), 0) AS actual_fail_ratio\n  FROM prediction_logs p\n  JOIN active_release r\n    ON p.model_run_id = r.active_model_run_id\n   AND p.threshold IS NOT DISTINCT FROM r.active_threshold\n  JOIN actual_labels a\n    ON a.sample_id = p.sample_id\n  WHERE p.predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND p.runtime_slot = 'release'\n  GROUP BY 1\n)\nSELECT\n  to_timestamp(COALESCE(p.bucket, a.bucket)) AS time,\n  p.predicted_fail_ratio,\n  a.actual_fail_ratio\nFROM predicted p\nFULL OUTER JOIN actual a ON a.bucket = p.bucket\nORDER BY 1;",
+          "rawSql": "WITH evaluation_parameters AS (\n  SELECT\n    ${__from:date:seconds}::DOUBLE PRECISION AS window_start,\n    ${__to:date:seconds}::DOUBLE PRECISION AS cutoff_time\n),\nactive_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\ndecision_cohort AS (\n  SELECT\n    p.prediction_id,\n    p.sample_id,\n    p.model_run_id,\n    p.threshold,\n    p.serving_snapshot_id,\n    p.snapshot_version,\n    p.predicted_at,\n    p.predicted_value\n  FROM prediction_logs p\n  JOIN active_release r\n    ON p.model_run_id = r.active_model_run_id\n   AND p.threshold IS NOT DISTINCT FROM r.active_threshold\n  CROSS JOIN evaluation_parameters e\n  WHERE p.predicted_at >= e.window_start\n    AND p.predicted_at < e.cutoff_time\n    AND p.runtime_slot = 'release'\n    AND NOT EXISTS (\n      SELECT 1\n      FROM prediction_logs earlier\n      WHERE earlier.model_run_id = p.model_run_id\n        AND earlier.threshold = p.threshold\n        AND earlier.sample_id = p.sample_id\n        AND earlier.serving_snapshot_id = p.serving_snapshot_id\n        AND earlier.snapshot_version = p.snapshot_version\n        AND (\n          earlier.predicted_at < p.predicted_at\n          OR (\n            earlier.predicted_at = p.predicted_at\n            AND earlier.prediction_id < p.prediction_id\n          )\n        )\n    )\n),\ncohort_samples AS (\n  SELECT DISTINCT sample_id\n  FROM decision_cohort\n),\nranked_labels AS (\n  SELECT\n    le.label_event_id,\n    le.sample_id,\n    le.label_revision,\n    le.available_at,\n    le.actual_value,\n    ROW_NUMBER() OVER (\n      PARTITION BY le.sample_id\n      ORDER BY\n        le.label_revision DESC,\n        le.available_at DESC,\n        le.label_event_id DESC\n    ) AS label_rank\n  FROM label_events le\n  JOIN cohort_samples c\n    ON c.sample_id = le.sample_id\n  CROSS JOIN evaluation_parameters e\n  WHERE le.available_at <= e.cutoff_time\n),\nlabels_at_cutoff AS (\n  SELECT\n    label_event_id,\n    sample_id,\n    actual_value\n  FROM ranked_labels\n  WHERE label_rank = 1\n)\nSELECT\n  to_timestamp(floor(d.predicted_at / 60) * 60) AS time,\n  AVG(\n    CASE WHEN d.predicted_value = 1 THEN 1.0 ELSE 0.0 END\n  ) AS predicted_fail_ratio,\n  AVG(\n    CASE WHEN l.actual_value = 1 THEN 1.0 ELSE 0.0 END\n  ) FILTER (WHERE l.label_event_id IS NOT NULL) AS labeled_actual_fail_ratio\nFROM decision_cohort d\nLEFT JOIN labels_at_cutoff l\n  ON l.sample_id = d.sample_id\nGROUP BY floor(d.predicted_at / 60) * 60\nORDER BY time;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1389,7 +1389,7 @@
           }
         }
       ],
-      "title": "Predicted vs Actual Fail Ratio - Active Release",
+      "title": "Predicted vs Labeled Actual Fail Ratio - Active Release",
       "type": "timeseries",
       "collapsed": false
     },
@@ -1576,7 +1576,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nlatest AS (\n  SELECT DISTINCT ON (m.model_run_id, m.threshold, m.metric_name)\n    m.model_run_id,\n    m.threshold,\n    m.metric_name,\n    m.metric_value,\n    m.n_samples,\n    m.n_fail_samples,\n    m.computed_at\n  FROM model_metrics m\n  WHERE m.metric_name IN ('fail_f1', 'fail_recall', 'fail_precision', 'pr_auc', 'accuracy')\n  ORDER BY m.model_run_id, m.threshold, m.metric_name, m.computed_at DESC\n),\nactive AS (\n  SELECT l.*\n  FROM latest l\n  JOIN release_state r\n    ON l.model_run_id = r.active_model_run_id\n   AND l.threshold IS NOT DISTINCT FROM r.active_threshold\n),\nprevious AS (\n  SELECT l.*\n  FROM latest l\n  JOIN release_state r\n    ON l.model_run_id = r.previous_model_run_id\n   AND l.threshold IS NOT DISTINCT FROM r.previous_threshold\n)\nSELECT\n  a.metric_name,\n  a.metric_value AS active_value,\n  p.metric_value AS previous_value,\n  a.metric_value - p.metric_value AS delta,\n  a.n_samples AS active_samples,\n  a.n_fail_samples AS active_fail_samples,\n  to_timestamp(a.computed_at) AS active_computed_at\nFROM active a\nLEFT JOIN previous p\n  ON p.metric_name = a.metric_name\nORDER BY\n  CASE a.metric_name\n    WHEN 'fail_f1' THEN 1\n    WHEN 'fail_recall' THEN 2\n    WHEN 'fail_precision' THEN 3\n    WHEN 'pr_auc' THEN 4\n    WHEN 'accuracy' THEN 5\n    ELSE 99\n  END;",
+          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nactive_latest AS (\n  SELECT q.*\n  FROM live_model_quality_evaluations q\n  JOIN release_state r\n    ON q.model_run_id = r.active_model_run_id\n   AND q.threshold IS NOT DISTINCT FROM r.active_threshold\n  ORDER BY q.cutoff_time DESC, q.evaluation_id DESC\n  LIMIT 1\n),\nprevious_latest AS (\n  SELECT q.*\n  FROM live_model_quality_evaluations q\n  JOIN release_state r\n    ON q.model_run_id = r.previous_model_run_id\n   AND q.threshold IS NOT DISTINCT FROM r.previous_threshold\n  WHERE r.previous_model_run_id IS NOT NULL\n  ORDER BY q.cutoff_time DESC, q.evaluation_id DESC\n  LIMIT 1\n)\nSELECT\n  metric.metric_name,\n  metric.active_value,\n  metric.previous_value,\n  metric.active_value - metric.previous_value AS delta,\n  a.evaluation_status AS active_status,\n  p.evaluation_status AS previous_status,\n  a.n_samples AS active_labeled_decisions,\n  p.n_samples AS previous_labeled_decisions,\n  a.n_fail_samples AS active_fail_samples,\n  p.n_fail_samples AS previous_fail_samples,\n  to_timestamp(a.cutoff_time) AS active_cutoff_time,\n  to_timestamp(p.cutoff_time) AS previous_cutoff_time\nFROM active_latest a\nLEFT JOIN previous_latest p\n  ON TRUE\nCROSS JOIN LATERAL (\n  VALUES\n    (1, 'fail_f1', a.fail_f1, p.fail_f1),\n    (2, 'fail_recall', a.fail_recall, p.fail_recall),\n    (3, 'fail_precision', a.fail_precision, p.fail_precision),\n    (4, 'fail_average_precision', a.fail_average_precision, p.fail_average_precision),\n    (5, 'accuracy', a.accuracy, p.accuracy)\n) AS metric(sort_order, metric_name, active_value, previous_value)\nORDER BY metric.sort_order;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1688,7 +1688,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nselected AS (\n  SELECT\n    active_model_run_id AS model_run_id,\n    active_threshold AS threshold,\n    'active' AS model_slot\n  FROM release_state\n\n  UNION ALL\n\n  SELECT\n    previous_model_run_id AS model_run_id,\n    previous_threshold AS threshold,\n    'previous' AS model_slot\n  FROM release_state\n  WHERE previous_model_run_id IS NOT NULL\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  s.model_slot || ' / fail_f1' AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN selected s\n  ON m.model_run_id = s.model_run_id\n AND m.threshold IS NOT DISTINCT FROM s.threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name = 'fail_f1'\nORDER BY time, metric;",
+          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nselected AS (\n  SELECT\n    active_model_run_id AS model_run_id,\n    active_threshold AS threshold,\n    'active' AS model_slot\n  FROM release_state\n\n  UNION ALL\n\n  SELECT\n    previous_model_run_id AS model_run_id,\n    previous_threshold AS threshold,\n    'previous' AS model_slot\n  FROM release_state\n  WHERE previous_model_run_id IS NOT NULL\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  s.model_slot || ' / fail_f1' AS metric,\n  q.fail_f1 AS value\nFROM live_model_quality_evaluations q\nJOIN selected s\n  ON q.model_run_id = s.model_run_id\n AND q.threshold IS NOT DISTINCT FROM s.threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time, metric;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -2064,7 +2064,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 76
       },
@@ -2110,6 +2110,114 @@
       ],
       "title": "Fixed Reference Top Feature PSI",
       "type": "table",
+      "collapsed": false
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "description": "Selected feature PSI history. Missing points mean the feature was not persisted in that evaluation's Top 30 PSI rows.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "PSI",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 6,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 76
+      },
+      "id": 51,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH requested_features AS (\n  SELECT unnest(ARRAY[${psi_feature:sqlstring}]::TEXT[]) AS feature_name\n),\nlatest_top_feature AS (\n  SELECT d.feature_name\n  FROM drift_metrics d\n  WHERE EXISTS (\n    SELECT 1\n    FROM requested_features r\n    WHERE r.feature_name = '__latest_top__'\n  )\n    AND d.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND d.window_type = 'fixed_reference_time_window'\n    AND d.metric_family = 'feature'\n    AND d.metric_name = 'feature_psi'\n  ORDER BY d.computed_at DESC, d.metric_value DESC NULLS LAST\n  LIMIT 1\n),\nselected_features AS (\n  SELECT feature_name\n  FROM requested_features\n  WHERE feature_name <> '__latest_top__'\n\n  UNION\n\n  SELECT feature_name\n  FROM latest_top_feature\n),\nevaluations AS (\n  SELECT DISTINCT\n    evaluation_id,\n    computed_at,\n    reference_baseline_id\n  FROM drift_metrics\n  WHERE computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND window_type = 'fixed_reference_time_window'\n)\nSELECT\n  to_timestamp(e.computed_at) AS time,\n  f.feature_name || ' / ' ||\n    COALESCE(\n      b.baseline_name || ' [' || left(e.reference_baseline_id, 8) || ']',\n      'baseline=unknown'\n    ) AS metric,\n  d.metric_value::DOUBLE PRECISION AS value\nFROM evaluations e\nCROSS JOIN selected_features f\nLEFT JOIN drift_metrics d\n  ON d.evaluation_id = e.evaluation_id\n AND d.window_type = 'fixed_reference_time_window'\n AND d.metric_family = 'feature'\n AND d.metric_name = 'feature_psi'\n AND d.feature_name = f.feature_name\nLEFT JOIN drift_reference_baselines b\n  ON b.baseline_id = e.reference_baseline_id\nORDER BY e.computed_at, metric;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Fixed Reference Selected Feature PSI Trend",
+      "type": "timeseries",
       "collapsed": false
     },
     {
@@ -2924,7 +3032,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH selected_model AS (\n  SELECT\n    split_part('${model_run:raw}', '|', 1) AS model_run_id,\n    NULLIF(split_part('${model_run:raw}', '|', 2), 'null')::DOUBLE PRECISION AS threshold\n)\nSELECT\n  to_timestamp(m.computed_at) AS time,\n  m.metric_name AS metric,\n  m.metric_value AS value\nFROM model_metrics m\nJOIN selected_model s\n  ON m.model_run_id = s.model_run_id\n AND m.threshold IS NOT DISTINCT FROM s.threshold\nWHERE m.computed_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  AND m.metric_name IN (${metric:sqlstring})\nORDER BY time, metric;",
+          "rawSql": "WITH selected_model AS (\n  SELECT\n    split_part('${model_run:raw}', '|', 1) AS model_run_id,\n    NULLIF(split_part('${model_run:raw}', '|', 2), 'null')::DOUBLE PRECISION AS threshold\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  metric.metric_name AS metric,\n  metric.metric_value AS value\nFROM live_model_quality_evaluations q\nJOIN selected_model s\n  ON q.model_run_id = s.model_run_id\n AND q.threshold IS NOT DISTINCT FROM s.threshold\nCROSS JOIN LATERAL (\n  VALUES\n    ('accuracy', q.accuracy),\n    ('fail_precision', q.fail_precision),\n    ('fail_recall', q.fail_recall),\n    ('fail_f1', q.fail_f1),\n    ('fail_average_precision', q.fail_average_precision)\n) AS metric(metric_name, metric_value)\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\n  AND metric.metric_name IN (${metric:sqlstring})\nORDER BY time, metric;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -2945,7 +3053,7 @@
           }
         }
       ],
-      "title": "Fail Metrics - Selected Model",
+      "title": "Live Metrics - Selected Model",
       "type": "timeseries",
       "collapsed": false
     },
@@ -3042,7 +3150,7 @@
       },
       "id": 22,
       "panels": [],
-      "title": "Debug / Quality Windows",
+      "title": "Debug / Live Sliding Quality",
       "type": "row"
     },
     {
@@ -3103,7 +3211,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "  SELECT\n    window_id,\n    to_timestamp(window_start) AS window_start,\n    to_timestamp(window_end) AS window_end,\n    evaluation_status,\n    n_samples,\n    n_fail_samples,\n    accuracy,\n    fail_precision,\n    fail_recall,\n    fail_f1,\n    pr_auc,\n    true_negative,\n    false_positive,\n    false_negative,\n    true_positive\n  FROM model_quality_windows\n  ORDER BY window_end DESC\n  LIMIT 20;",
+          "rawSql": "WITH selected_model AS (\n  SELECT\n    split_part('${model_run:raw}', '|', 1) AS model_run_id,\n    NULLIF(split_part('${model_run:raw}', '|', 2), 'null')::DOUBLE PRECISION AS threshold\n)\nSELECT\n  q.evaluation_id,\n  to_timestamp(q.cutoff_time) AS cutoff_time,\n  to_timestamp(q.window_start) AS window_start,\n  to_timestamp(q.window_end) AS window_end,\n  q.label_maturity_seconds,\n  q.monitoring_window_seconds,\n  q.evaluation_status,\n  q.n_decisions,\n  q.n_samples AS labeled_decisions,\n  q.label_coverage,\n  q.n_pass_samples,\n  q.n_fail_samples,\n  q.accuracy,\n  q.fail_precision,\n  q.fail_recall,\n  q.fail_f1,\n  q.fail_average_precision,\n  q.true_negative,\n  q.false_positive,\n  q.false_negative,\n  q.true_positive\nFROM live_model_quality_evaluations q\nJOIN selected_model s\n  ON q.model_run_id = s.model_run_id\n AND q.threshold IS NOT DISTINCT FROM s.threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY q.cutoff_time DESC, q.evaluation_id DESC\nLIMIT 20;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -3124,7 +3232,7 @@
           }
         }
       ],
-      "title": "Window Status Table",
+      "title": "Live Sliding Evaluation Status - Selected Model",
       "type": "table",
       "collapsed": false
     },
@@ -3215,7 +3323,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "  SELECT\n    to_timestamp(window_end) AS time,\n    accuracy,\n    fail_precision,\n    fail_recall,\n    fail_f1,\n    pr_auc\n  FROM model_quality_windows\n  WHERE window_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n    AND evaluation_status = 'ok'\n  ORDER BY time;",
+          "rawSql": "WITH selected_model AS (\n  SELECT\n    split_part('${model_run:raw}', '|', 1) AS model_run_id,\n    NULLIF(split_part('${model_run:raw}', '|', 2), 'null')::DOUBLE PRECISION AS threshold\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  q.accuracy,\n  q.fail_precision,\n  q.fail_recall,\n  q.fail_f1,\n  q.fail_average_precision\nFROM live_model_quality_evaluations q\nJOIN selected_model s\n  ON q.model_run_id = s.model_run_id\n AND q.threshold IS NOT DISTINCT FROM s.threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -3236,7 +3344,7 @@
           }
         }
       ],
-      "title": "Window Quality Trend",
+      "title": "Live Sliding Quality Trend - Selected Model",
       "type": "timeseries",
       "collapsed": false
     },
@@ -3322,7 +3430,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "  WITH latest AS (\n    SELECT *\n    FROM model_quality_windows\n    WHERE evaluation_status = 'ok'\n    ORDER BY window_end DESC\n    LIMIT 1\n  )\n  SELECT 'true_negative' AS bucket, true_negative AS count FROM latest\n  UNION ALL\n  SELECT 'false_positive', false_positive FROM latest\n  UNION ALL\n  SELECT 'false_negative', false_negative FROM latest\n  UNION ALL\n  SELECT 'true_positive', true_positive FROM latest;",
+          "rawSql": "WITH selected_model AS (\n  SELECT\n    split_part('${model_run:raw}', '|', 1) AS model_run_id,\n    NULLIF(split_part('${model_run:raw}', '|', 2), 'null')::DOUBLE PRECISION AS threshold\n),\nlatest_eval AS (\n  SELECT q.*\n  FROM live_model_quality_evaluations q\n  JOIN selected_model s\n    ON q.model_run_id = s.model_run_id\n   AND q.threshold IS NOT DISTINCT FROM s.threshold\n  ORDER BY q.cutoff_time DESC, q.evaluation_id DESC\n  LIMIT 1\n)\nSELECT matrix.bucket, matrix.count\nFROM latest_eval q\nCROSS JOIN LATERAL (\n  VALUES\n    (1, 'true_negative', q.true_negative),\n    (2, 'false_positive', q.false_positive),\n    (3, 'false_negative', q.false_negative),\n    (4, 'true_positive', q.true_positive)\n) AS matrix(sort_order, bucket, count)\nORDER BY matrix.sort_order;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -3343,7 +3451,7 @@
           }
         }
       ],
-      "title": "Latest Quality Confusion Matrix",
+      "title": "Latest Live Confusion Matrix - Selected Model",
       "type": "barchart",
       "collapsed": false
     },
@@ -3815,15 +3923,41 @@
           "type": "grafana-postgresql-datasource",
           "uid": "monitoring-postgres"
         },
-        "definition": "WITH combos AS (\n  SELECT DISTINCT\n    model_run_id,\n    threshold\n  FROM model_metrics\n),\nruntime AS (\n  SELECT\n    runtime_slot,\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n),\nannotated AS (\n  SELECT\n    c.model_run_id,\n    c.threshold,\n    string_agg(\n      r.runtime_slot,\n      ',' ORDER BY CASE r.runtime_slot\n        WHEN 'release' THEN 1\n        WHEN 'canary' THEN 2\n        WHEN 'shadow' THEN 3\n        ELSE 9\n      END\n    ) FILTER (WHERE r.runtime_slot IS NOT NULL) AS runtime_slots\n  FROM combos c\n  LEFT JOIN runtime r\n    ON r.active_model_run_id = c.model_run_id\n   AND r.active_threshold IS NOT DISTINCT FROM c.threshold\n  GROUP BY c.model_run_id, c.threshold\n)\nSELECT\n  COALESCE(\n    runtime_slots || ' / run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null'),\n    'run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null')\n  ) AS __text,\n  model_run_id || '|' || COALESCE(threshold::text, 'null') AS __value\nFROM annotated\nORDER BY\n  CASE\n    WHEN runtime_slots LIKE '%release%' THEN 0\n    WHEN runtime_slots LIKE '%canary%' THEN 1\n    WHEN runtime_slots LIKE '%shadow%' THEN 2\n    ELSE 3\n  END,\n  __text;",
+        "definition": "WITH combos AS (\n  SELECT DISTINCT\n    model_run_id,\n    threshold\n  FROM live_model_quality_evaluations\n),\nruntime AS (\n  SELECT\n    runtime_slot,\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n),\nannotated AS (\n  SELECT\n    c.model_run_id,\n    c.threshold,\n    string_agg(\n      r.runtime_slot,\n      ',' ORDER BY CASE r.runtime_slot\n        WHEN 'release' THEN 1\n        WHEN 'canary' THEN 2\n        WHEN 'shadow' THEN 3\n        ELSE 9\n      END\n    ) FILTER (WHERE r.runtime_slot IS NOT NULL) AS runtime_slots\n  FROM combos c\n  LEFT JOIN runtime r\n    ON r.active_model_run_id = c.model_run_id\n   AND r.active_threshold IS NOT DISTINCT FROM c.threshold\n  GROUP BY c.model_run_id, c.threshold\n)\nSELECT\n  COALESCE(\n    runtime_slots || ' / run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null'),\n    'run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null')\n  ) AS __text,\n  model_run_id || '|' || COALESCE(threshold::text, 'null') AS __value\nFROM annotated\nORDER BY\n  CASE\n    WHEN runtime_slots LIKE '%release%' THEN 0\n    WHEN runtime_slots LIKE '%canary%' THEN 1\n    WHEN runtime_slots LIKE '%shadow%' THEN 2\n    ELSE 3\n  END,\n  __text;",
         "includeAll": false,
-        "label": "Model run / threshold",
+        "label": "Live model run / threshold",
         "name": "model_run",
         "options": [],
-        "query": "WITH combos AS (\n  SELECT DISTINCT\n    model_run_id,\n    threshold\n  FROM model_metrics\n),\nruntime AS (\n  SELECT\n    runtime_slot,\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n),\nannotated AS (\n  SELECT\n    c.model_run_id,\n    c.threshold,\n    string_agg(\n      r.runtime_slot,\n      ',' ORDER BY CASE r.runtime_slot\n        WHEN 'release' THEN 1\n        WHEN 'canary' THEN 2\n        WHEN 'shadow' THEN 3\n        ELSE 9\n      END\n    ) FILTER (WHERE r.runtime_slot IS NOT NULL) AS runtime_slots\n  FROM combos c\n  LEFT JOIN runtime r\n    ON r.active_model_run_id = c.model_run_id\n   AND r.active_threshold IS NOT DISTINCT FROM c.threshold\n  GROUP BY c.model_run_id, c.threshold\n)\nSELECT\n  COALESCE(\n    runtime_slots || ' / run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null'),\n    'run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null')\n  ) AS __text,\n  model_run_id || '|' || COALESCE(threshold::text, 'null') AS __value\nFROM annotated\nORDER BY\n  CASE\n    WHEN runtime_slots LIKE '%release%' THEN 0\n    WHEN runtime_slots LIKE '%canary%' THEN 1\n    WHEN runtime_slots LIKE '%shadow%' THEN 2\n    ELSE 3\n  END,\n  __text;",
+        "query": "WITH combos AS (\n  SELECT DISTINCT\n    model_run_id,\n    threshold\n  FROM live_model_quality_evaluations\n),\nruntime AS (\n  SELECT\n    runtime_slot,\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n),\nannotated AS (\n  SELECT\n    c.model_run_id,\n    c.threshold,\n    string_agg(\n      r.runtime_slot,\n      ',' ORDER BY CASE r.runtime_slot\n        WHEN 'release' THEN 1\n        WHEN 'canary' THEN 2\n        WHEN 'shadow' THEN 3\n        ELSE 9\n      END\n    ) FILTER (WHERE r.runtime_slot IS NOT NULL) AS runtime_slots\n  FROM combos c\n  LEFT JOIN runtime r\n    ON r.active_model_run_id = c.model_run_id\n   AND r.active_threshold IS NOT DISTINCT FROM c.threshold\n  GROUP BY c.model_run_id, c.threshold\n)\nSELECT\n  COALESCE(\n    runtime_slots || ' / run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null'),\n    'run=' || left(model_run_id, 8) || ' / th=' || COALESCE(threshold::text, 'null')\n  ) AS __text,\n  model_run_id || '|' || COALESCE(threshold::text, 'null') AS __value\nFROM annotated\nORDER BY\n  CASE\n    WHEN runtime_slots LIKE '%release%' THEN 0\n    WHEN runtime_slots LIKE '%canary%' THEN 1\n    WHEN runtime_slots LIKE '%shadow%' THEN 2\n    ELSE 3\n  END,\n  __text;",
         "refresh": 1,
         "regex": "",
         "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "Latest top feature"
+          ],
+          "value": [
+            "__latest_top__"
+          ]
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "monitoring-postgres"
+        },
+        "definition": "SELECT\n  option.__text,\n  option.__value\nFROM (\n  SELECT\n    0 AS sort_order,\n    'Latest top feature'::TEXT AS __text,\n    '__latest_top__'::TEXT AS __value\n\n  UNION ALL\n\n  SELECT\n    1 AS sort_order,\n    feature_name AS __text,\n    feature_name AS __value\n  FROM drift_metrics\n  WHERE window_type = 'fixed_reference_time_window'\n    AND metric_family = 'feature'\n    AND metric_name = 'feature_psi'\n    AND feature_name IS NOT NULL\n  GROUP BY feature_name\n) option\nORDER BY option.sort_order, option.__text;",
+        "includeAll": false,
+        "label": "PSI feature",
+        "multi": true,
+        "name": "psi_feature",
+        "options": [],
+        "query": "SELECT\n  option.__text,\n  option.__value\nFROM (\n  SELECT\n    0 AS sort_order,\n    'Latest top feature'::TEXT AS __text,\n    '__latest_top__'::TEXT AS __value\n\n  UNION ALL\n\n  SELECT\n    1 AS sort_order,\n    feature_name AS __text,\n    feature_name AS __value\n  FROM drift_metrics\n  WHERE window_type = 'fixed_reference_time_window'\n    AND metric_family = 'feature'\n    AND metric_name = 'feature_psi'\n    AND feature_name IS NOT NULL\n  GROUP BY feature_name\n) option\nORDER BY option.sort_order, option.__text;",
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
         "type": "query"
       },
       {
@@ -3854,9 +3988,19 @@
             "selected": false,
             "text": "fail_f1",
             "value": "fail_f1"
+          },
+          {
+            "selected": false,
+            "text": "fail_average_precision",
+            "value": "fail_average_precision"
+          },
+          {
+            "selected": false,
+            "text": "accuracy",
+            "value": "accuracy"
           }
         ],
-        "query": "fail_precision,fail_recall,fail_f1",
+        "query": "fail_precision,fail_recall,fail_f1,fail_average_precision,accuracy",
         "type": "custom"
       }
     ]

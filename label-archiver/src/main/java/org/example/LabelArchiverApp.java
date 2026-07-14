@@ -108,9 +108,10 @@ public final class LabelArchiverApp {
         ConsumerRecord<String, String> record
     ) throws SQLException {
         LabelRow label = LabelParser.parse(record.value(), record.key());
+        boolean inserted;
 
         try {
-            repository.upsert(connection, label);
+            inserted = repository.insert(connection, label);
             connection.commit();
         } catch (SQLException error) {
             rollbackQuietly(connection);
@@ -125,9 +126,13 @@ public final class LabelArchiverApp {
         ));
 
         LOG.info(
-            "label_archived sample_id={} actual_label={} topic={} partition={} offset={} committed_offset={}",
+            "label_archived label_event_id={} sample_id={} label_revision={} actual_label={} "
+                + "write_result={} topic={} partition={} offset={} committed_offset={}",
+            label.labelEventId(),
             label.sampleId(),
+            label.labelRevision(),
             label.actualLabel(),
+            inserted ? "inserted" : "replayed",
             record.topic(),
             record.partition(),
             record.offset(),

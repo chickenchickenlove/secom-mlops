@@ -41,6 +41,10 @@ $ ./scripts/scenarios/scenario2.sh
 - Prediction producer는 complete snapshot이 쌓일 시간을 주기 위해 약 30초 뒤 시작됩니다.
 - 중지하려면 터미널에서 Ctrl+C를 누릅니다.
 
+#### Scenario documentation
+
+각 Drift 시나리오의 목적과 실행 방법은 [SCENARIO.md](./SCENARIO.md)를 참고하세요.
+
 ### 3. Access the dashboard.
 - http://localhost:3000에 접속하셔서 `Monitoring` dashboard로 접근해주세요.
 - Kafka로 메세지는 공급되고 있습니다. 
@@ -59,8 +63,10 @@ $ ./scripts/scenarios/scenario2.sh
 - Airflow UI에서 `train_candidate_from_offline_point_in_time_features` DAG를 실행합니다.
 - Important params:
   - `dry_run`: `False`
-  - `recent_minutes`: enough window with predictions, labels, and complete snapshots
-  - `min_samples`, `min_fail_samples`, `min_pass_samples`: lower them for a quick demo if needed
+  - `cohort_start_time`, `cutoff_time`, `label_maturity_seconds`: first-complete snapshot 학습 범위와 label cutoff
+  - `min_samples`: labeled 개발 원본의 최소 크기입니다. 기본값은 1,000이며 Candidate가 선택하는 최대 eligible snapshot 수도 1,000입니다.
+  - `min_label_coverage`: 최신 eligible snapshot을 먼저 선택한 뒤 계산하는 최소 label coverage입니다. 기본값은 `0.95`입니다.
+  - `min_fail_samples`, `min_pass_samples`: 각 label class의 최소 학습 표본입니다.
 - 완료 시, MLflow에 모델이 등록됩니다.
 ![mlflow.png](docs/images/mlflow.png)
 
@@ -69,8 +75,13 @@ $ ./scripts/scenarios/scenario2.sh
 - Important params:
   - `dry_run`: `False`
   - `candidate_version`: empty이면 MLflow `candidate` alias를 사용합니다.
-- 만약 `candidate`가 serving snapshot 평가 기준 현재 `champion`보다 성능이 좋지 않다면, DAG는 성공하지만 배포 준비는 `failed`로 끝이 납니다.
-- 정상적으로 종료될 경우, eval_status는 `passed`가 됩니다.
+  - `cohort_start_time`, `cutoff_time`, `label_maturity_seconds`: Champion model run의 prediction decision 평가 범위와 label cutoff
+  - `max_decisions`: 최신 canonical Champion decision을 선택하는 최대 개수입니다. 기본값은 1,000입니다.
+  - `min_decisions`, `min_label_coverage`: quick demo에서는 실제 데이터 양에 맞게 낮출 수 있습니다.
+  - `min_fail_samples`, `min_pass_samples`: 각 label class의 최소 평가 표본입니다.
+- Gate는 Champion model run의 실제 prediction decision이 참조한 exact snapshot/version/hash를 복원하고, `cutoff_time`까지 도착한 최신 label revision을 사용합니다.
+- 현재 Gate는 `runtime_slot='release'`와 실제 release threshold를 아직 강제하지 않습니다.
+- `passed`일 때만 DAG가 성공합니다. `failed`, `insufficient_data`, snapshot/hash integrity 오류는 DAG 실패로 끝납니다.
 ![passed.png](docs/images/passed.png)
 
 

@@ -101,6 +101,14 @@ def load_features(data_path: str) -> list[list[float | None]]:
     ]
 
 
+def compute_feature_medians(
+        rows: list[list[float | None]],
+) -> list[float | None]:
+    frame = pd.DataFrame(rows, dtype="float64")
+    medians = frame.median(axis=0, skipna=True)
+    return [normalize_value(value) for value in medians.tolist()]
+
+
 def resolve_state_path(raw_state_path: str | None, feature_group: str) -> Path:
     if raw_state_path is not None:
         return Path(raw_state_path)
@@ -169,6 +177,24 @@ def apply_feature_offset_actions(
     return updated_row
 
 
+def reflect_features_around_median(
+        row: list[float | None],
+        medians: list[float | None],
+) -> list[float | None]:
+    if len(row) != len(medians):
+        raise ValueError(
+            "feature row and median count must match: "
+            f"features={len(row)} medians={len(medians)}"
+        )
+
+    return [
+        None
+        if value is None
+        else value if median is None else 2.0 * median - value
+        for value, median in zip(row, medians)
+    ]
+
+
 def build_feature_patch(row: list[float | None], indices: range) -> dict[str, float | None]:
     return {
         FEATURE_KEYS[idx]: row[idx]
@@ -207,6 +233,9 @@ def resolve_drift_segment(args: argparse.Namespace) -> str:
     for action in normalize_feature_offset_actions(args.feature_offset_action):
         segment_parts.append(format_feature_offset_action_for_name(action))
 
+    if args.reflect_all_features_around_median:
+        segment_parts.append("reflect_all_features_around_median")
+
     if not segment_parts:
         return DEFAULT_DRIFT_SEGMENT
 
@@ -220,6 +249,7 @@ def build_feature_events(
         batch_size: int,
         simulation_run_id: str,
         action_start_index: int = 0,
+        feature_medians: list[float | None] | None = None,
 ) -> list[dict[str, Any]]:
     drift_segment = resolve_drift_segment(args)
     created_at = time.time()
@@ -227,6 +257,11 @@ def build_feature_events(
     groups = selected_feature_groups(args.feature_group)
     offset_actions = normalize_feature_offset_actions(args.feature_offset_action)
     events = []
+
+    if args.reflect_all_features_around_median and feature_medians is None:
+        raise ValueError(
+            "feature medians are required when reflecting all features"
+        )
 
     for item_index in range(batch_size):
         global_sample_index = start_index + item_index
@@ -242,6 +277,8 @@ def build_feature_events(
             offset_actions,
             action_start_index + item_index + 1,
         )
+        if args.reflect_all_features_around_median:
+            row = reflect_features_around_median(row, feature_medians)
 
         for feature_group, indices in groups.items():
             events.append({
@@ -445,6 +482,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--reflect-all-features-around-median",
+        action="store_true",
+        help=(
+            "Reflect every non-null feature around its median computed from "
+            "the complete input dataset."
+        ),
+    )
+    parser.add_argument(
         "--feature-offset-direction",
         choices=["none", "up", "down"],
         default="none",
@@ -483,6 +528,10 @@ def main() -> None:
     if any(len(row) != NUM_FEATURES for row in rows):
         raise ValueError(f"expected each feature row to have {NUM_FEATURES} values")
 
+    feature_medians = None
+    if args.reflect_all_features_around_median:
+        feature_medians = compute_feature_medians(rows)
+
     state_path = resolve_state_path(args.state_path, args.feature_group)
     state = load_state(state_path)
 
@@ -505,6 +554,7 @@ def main() -> None:
             batch_size=batch_size,
             simulation_run_id=simulation_run_id,
             action_start_index=total_sent,
+            feature_medians=feature_medians,
         )
 
         summarize(events)

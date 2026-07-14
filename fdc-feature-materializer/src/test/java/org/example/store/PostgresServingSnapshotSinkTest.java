@@ -118,6 +118,7 @@ class PostgresServingSnapshotSinkTest {
         return new ServingSnapshotRow(
             "state:secom-0000001:1000:3",
             3L,
+            "sha256:v1:" + "0".repeat(64),
             "secom-0000001",
             1.0,
             0.5,

@@ -12,6 +12,7 @@ final class ServingSnapshotRepository {
               serving_snapshot_id,
               sample_id,
               snapshot_version,
+              feature_hash,
               snapshot_time,
               window_start,
               window_end,
@@ -24,7 +25,7 @@ final class ServingSnapshotRepository {
               drift_segment,
               available_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?)
           ON CONFLICT (serving_snapshot_id) DO NOTHING
           """;
 
@@ -33,17 +34,18 @@ final class ServingSnapshotRepository {
             statement.setString(1, row.servingSnapshotId());
             statement.setString(2, row.sampleId());
             statement.setLong(3, row.snapshotVersion());
-            statement.setDouble(4, row.snapshotTime());
-            statement.setDouble(5, row.windowStart());
-            statement.setDouble(6, row.windowEnd());
-            statement.setString(7, row.snapshotStatus());
-            statement.setInt(8, row.featureCount());
-            statement.setInt(9, row.missingCount());
-            statement.setBoolean(10, row.isComplete());
-            statement.setString(11, row.featuresJson());
-            statement.setString(12, row.simulationRunId());
-            statement.setString(13, row.driftSegment());
-            statement.setDouble(14, availableAt);
+            statement.setString(4, row.featureHash());
+            statement.setDouble(5, row.snapshotTime());
+            statement.setDouble(6, row.windowStart());
+            statement.setDouble(7, row.windowEnd());
+            statement.setString(8, row.snapshotStatus());
+            statement.setInt(9, row.featureCount());
+            statement.setInt(10, row.missingCount());
+            statement.setBoolean(11, row.isComplete());
+            statement.setString(12, row.featuresJson());
+            statement.setString(13, row.simulationRunId());
+            statement.setString(14, row.driftSegment());
+            statement.setDouble(15, availableAt);
             return statement.executeUpdate();
         }
     }

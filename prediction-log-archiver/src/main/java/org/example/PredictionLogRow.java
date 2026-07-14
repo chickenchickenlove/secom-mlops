@@ -6,6 +6,7 @@ record PredictionLogRow(
     String sampleId,
     String servingSnapshotId,
     long snapshotVersion,
+    String featureHash,
     String modelRunId,
     String modelName,
     String modelVersion,

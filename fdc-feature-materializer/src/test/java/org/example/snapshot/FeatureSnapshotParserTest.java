@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FeatureSnapshotParserTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String FEATURE_HASH = "sha256:v1:" + "0".repeat(64);
 
     @Test
     void parsesValidCompleteSnapshot() throws Exception {
@@ -19,6 +20,7 @@ class FeatureSnapshotParserTest {
 
         assertEquals("state:secom-0000001:1000:3", row.servingSnapshotId());
         assertEquals(3L, row.snapshotVersion());
+        assertEquals(FEATURE_HASH, row.featureHash());
         assertEquals("secom-0000001", row.sampleId());
         assertEquals(1.0, row.snapshotTime());
         assertEquals(0.5, row.windowStart());
@@ -106,6 +108,26 @@ class FeatureSnapshotParserTest {
             IllegalArgumentException.class,
             () -> FeatureSnapshotParser.parse(mismatch.toString(), null)
         );
+    }
+
+    @Test
+    void rejectsMissingOrInvalidFeatureHash() {
+        ObjectNode missingHash = validSnapshot();
+        missingHash.remove("feature_hash");
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FeatureSnapshotParser.parse(missingHash.toString(), null)
+        );
+
+        ObjectNode invalidHash = validSnapshot();
+        invalidHash.put("feature_hash", "sha256:v1:not-a-hash");
+
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> FeatureSnapshotParser.parse(invalidHash.toString(), null)
+        );
+
+        assertEquals("invalid feature_hash: sha256:v1:not-a-hash", error.getMessage());
     }
 
     @Test
@@ -270,6 +292,7 @@ class FeatureSnapshotParserTest {
         snapshot.put("sample_id", "secom-0000001");
         snapshot.put("source_event_count", 3);
         snapshot.put("snapshot_version", 3);
+        snapshot.put("feature_hash", FEATURE_HASH);
         snapshot.put("snapshot_time", 1.0);
         snapshot.put("window_start", 0.5);
         snapshot.put("window_end", 1.0);

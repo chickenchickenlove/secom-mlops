@@ -4,17 +4,23 @@ Consumes prediction events from Kafka and archives them into PostgreSQL
 `prediction_logs`.
 
 Each prediction event must identify the immutable serving snapshot used for
-inference with a non-blank `serving_snapshot_id` and a positive integral
-`snapshot_version`. Operational events are emitted by `/predict-by-id`; the
-caller-feature `/predict` endpoint is debug-only and does not emit prediction
-evidence.
+inference with `serving_snapshot_id`, `sample_id`, a positive integral
+`snapshot_version`, and the assembler-generated `feature_hash`. Operational
+events are emitted by `/predict-by-id`; the caller-feature `/predict` endpoint
+is debug-only and does not emit prediction evidence.
 
 Prediction events and `prediction_logs` do not contain the full feature vector.
-The three drift feature consumers join `prediction_logs` to
-`serving_feature_snapshots` on the logical triple
-`serving_snapshot_id + sample_id + snapshot_version` and read the serving
-snapshot's `features_json`. There is intentionally no foreign key, while the
-small `missing_count` scalar remains in `prediction_logs`.
+Downstream feature consumers reconstruct the inference feature vector by
+joining `prediction_logs` to `serving_feature_snapshots` on:
+
+- `serving_snapshot_id`
+- `sample_id`
+- `snapshot_version`
+- matching `feature_hash`
+
+The hash identifies the Feature vector used for inference; it is not a
+prediction deduplication hash. There is intentionally no database foreign key.
+The small `missing_count` scalar remains in `prediction_logs`.
 
 This service is configured with environment variables. CLI arguments are not
 supported.
