@@ -3870,6 +3870,662 @@
       "title": "Kafka Bytes Out/sec by Topic",
       "type": "timeseries",
       "collapsed": false
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 175
+      },
+      "id": 58,
+      "panels": [],
+      "title": "Label Maturity / Fixed 10-Min Cohorts / Offline Training",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "description": "Latest six closed 10-minute cohorts. Only observable ages are drawn, so cumulative coverage never treats future ages as zero.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 6,
+            "lineWidth": 2,
+            "pointShape": "circle",
+            "pointSize": {
+              "fixed": 5
+            },
+            "pointStrokeWidth": 1,
+            "show": "points+lines"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Age (min)"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 10
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Age (minutes)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Coverage"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Label coverage"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 176
+      },
+      "id": 59,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent_cohorts AS (\n  SELECT cohort_start\n  FROM label_maturity_cohort_age_metrics\n  WHERE maturity_scope = 'offline'\n    AND cohort_closed = TRUE\n  GROUP BY cohort_start\n  ORDER BY cohort_start DESC\n  LIMIT 6\n),\ncohort_points AS (\n  SELECT\n    m.*,\n    MIN(m.age_minute) FILTER (\n      WHERE m.is_observable = TRUE\n        AND m.label_coverage >= 1.0\n    ) OVER (\n      PARTITION BY m.maturity_scope, m.cohort_start\n    ) AS first_full_age\n  FROM label_maturity_cohort_age_metrics m\n  JOIN recent_cohorts r\n    ON r.cohort_start = m.cohort_start\n  WHERE m.maturity_scope = 'offline'\n),\neffective_points AS (\n  SELECT\n    p.*,\n    CASE\n      WHEN p.is_observable = TRUE THEN p.label_coverage\n      WHEN p.first_full_age IS NOT NULL\n        AND p.age_minute >= p.first_full_age THEN 1.0\n      ELSE NULL\n    END AS effective_coverage\n  FROM cohort_points p\n)\nSELECT\n  p.age_minute AS \"Age (min)\",\n  p.effective_coverage::DOUBLE PRECISION AS \"Coverage\",\n  to_char(to_timestamp(p.cohort_start) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')\n    || '–' ||\n  to_char(to_timestamp(p.cohort_end - 1.0) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS \"Cohort\"\nFROM effective_points p\nWHERE p.effective_coverage IS NOT NULL\nORDER BY p.cohort_start, p.age_minute;",
+          "refId": "A"
+        }
+      ],
+      "title": "Offline Label Coverage Curves by Fixed Cohort",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "Cohort"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": false
+            }
+          }
+        }
+      ],
+      "type": "xychart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "description": "Latest twelve offline cohorts, including open/observing cohorts. Final denominator and future ages remain NULL.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "orange",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Coverage"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 176
+      },
+      "id": 60,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent_cohorts AS (\n  SELECT cohort_start\n  FROM label_maturity_cohort_age_metrics\n  WHERE maturity_scope = 'offline'\n  GROUP BY cohort_start\n  ORDER BY cohort_start DESC\n  LIMIT 12\n),\ncohort_points AS (\n  SELECT\n    m.*,\n    MIN(m.age_minute) FILTER (\n      WHERE m.is_observable = TRUE\n        AND m.label_coverage >= 1.0\n    ) OVER (\n      PARTITION BY m.maturity_scope, m.cohort_start\n    ) AS first_full_age\n  FROM label_maturity_cohort_age_metrics m\n  JOIN recent_cohorts r\n    ON r.cohort_start = m.cohort_start\n  WHERE m.maturity_scope = 'offline'\n),\neffective_points AS (\n  SELECT\n    p.*,\n    CASE\n      WHEN p.is_observable = TRUE THEN p.label_coverage\n      WHEN p.first_full_age IS NOT NULL\n        AND p.age_minute >= p.first_full_age THEN 1.0\n      ELSE NULL\n    END AS effective_coverage\n  FROM cohort_points p\n)\nSELECT\n  to_char(to_timestamp(p.cohort_start) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')\n    || '–' ||\n  to_char(to_timestamp(MAX(p.cohort_end) - 1.0) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS \"Cohort\",\n  MAX(p.cohort_status) AS \"Status\",\n  MAX(p.cohort_size_seen_at_refresh) AS \"Seen so far\",\n  MAX(p.cohort_size) AS \"Samples\",\n  MAX(p.age_minute) FILTER (WHERE p.is_observable) AS \"Observed through (min)\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 0))::DOUBLE PRECISION AS \"Coverage 0m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 1))::DOUBLE PRECISION AS \"Coverage 1m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 5))::DOUBLE PRECISION AS \"Coverage 5m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 10))::DOUBLE PRECISION AS \"Coverage 10m\",\n  CASE\n    WHEN MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 10) >= 1.0 THEN 0\n    ELSE MAX(p.unlabeled_count) FILTER (WHERE p.age_minute = 10)\n  END AS \"Unlabeled 10m\"\nFROM effective_points p\nGROUP BY p.cohort_start\nORDER BY p.cohort_start DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Offline Fixed-Cohort Summary",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "description": "Rows are the latest fixed 10-minute cohorts, including the open cohort; columns are age 0–10 minutes. Future ages stay NULL.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "orange",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^[0-9]+m$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "color-background"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 185
+      },
+      "id": 61,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent_cohorts AS (\n  SELECT cohort_start\n  FROM label_maturity_cohort_age_metrics\n  WHERE maturity_scope = 'offline'\n  GROUP BY cohort_start\n  ORDER BY cohort_start DESC\n  LIMIT 12\n),\ncohort_points AS (\n  SELECT\n    m.*,\n    MIN(m.age_minute) FILTER (\n      WHERE m.is_observable = TRUE\n        AND m.label_coverage >= 1.0\n    ) OVER (\n      PARTITION BY m.maturity_scope, m.cohort_start\n    ) AS first_full_age\n  FROM label_maturity_cohort_age_metrics m\n  JOIN recent_cohorts r\n    ON r.cohort_start = m.cohort_start\n  WHERE m.maturity_scope = 'offline'\n),\neffective_points AS (\n  SELECT\n    p.*,\n    CASE\n      WHEN p.is_observable = TRUE THEN p.label_coverage\n      WHEN p.first_full_age IS NOT NULL\n        AND p.age_minute >= p.first_full_age THEN 1.0\n      ELSE NULL\n    END AS effective_coverage\n  FROM cohort_points p\n)\nSELECT\n  to_char(to_timestamp(p.cohort_start) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')\n    || '–' ||\n  to_char(to_timestamp(MAX(p.cohort_end) - 1.0) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS \"Cohort\",\n  MAX(p.cohort_status) AS \"Status\",\n  MAX(p.cohort_size_seen_at_refresh) AS \"Seen\",\n  MAX(p.cohort_size) AS \"Final N\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 0))::DOUBLE PRECISION AS \"0m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 1))::DOUBLE PRECISION AS \"1m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 2))::DOUBLE PRECISION AS \"2m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 3))::DOUBLE PRECISION AS \"3m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 4))::DOUBLE PRECISION AS \"4m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 5))::DOUBLE PRECISION AS \"5m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 6))::DOUBLE PRECISION AS \"6m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 7))::DOUBLE PRECISION AS \"7m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 8))::DOUBLE PRECISION AS \"8m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 9))::DOUBLE PRECISION AS \"9m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 10))::DOUBLE PRECISION AS \"10m\"\nFROM effective_points p\nGROUP BY p.cohort_start\nORDER BY p.cohort_start DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Offline Cohort × Age Coverage Matrix",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 193
+      },
+      "id": 62,
+      "panels": [],
+      "title": "Label Maturity / Fixed 10-Min Cohorts / Serving Gate",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "description": "Latest six closed cohorts of canonical release predictions. Only observable ages are drawn; labels available before prediction count at age 0.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 6,
+            "lineWidth": 2,
+            "pointShape": "circle",
+            "pointSize": {
+              "fixed": 5
+            },
+            "pointStrokeWidth": 1,
+            "show": "points+lines"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Age (min)"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 10
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Age (minutes)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Coverage"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Label coverage"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 194
+      },
+      "id": 63,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent_cohorts AS (\n  SELECT cohort_start\n  FROM label_maturity_cohort_age_metrics\n  WHERE maturity_scope = 'serving'\n    AND cohort_closed = TRUE\n  GROUP BY cohort_start\n  ORDER BY cohort_start DESC\n  LIMIT 6\n),\ncohort_points AS (\n  SELECT\n    m.*,\n    MIN(m.age_minute) FILTER (\n      WHERE m.is_observable = TRUE\n        AND m.label_coverage >= 1.0\n    ) OVER (\n      PARTITION BY m.maturity_scope, m.cohort_start\n    ) AS first_full_age\n  FROM label_maturity_cohort_age_metrics m\n  JOIN recent_cohorts r\n    ON r.cohort_start = m.cohort_start\n  WHERE m.maturity_scope = 'serving'\n),\neffective_points AS (\n  SELECT\n    p.*,\n    CASE\n      WHEN p.is_observable = TRUE THEN p.label_coverage\n      WHEN p.first_full_age IS NOT NULL\n        AND p.age_minute >= p.first_full_age THEN 1.0\n      ELSE NULL\n    END AS effective_coverage\n  FROM cohort_points p\n)\nSELECT\n  p.age_minute AS \"Age (min)\",\n  p.effective_coverage::DOUBLE PRECISION AS \"Coverage\",\n  to_char(to_timestamp(p.cohort_start) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')\n    || '–' ||\n  to_char(to_timestamp(p.cohort_end - 1.0) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS \"Cohort\"\nFROM effective_points p\nWHERE p.effective_coverage IS NOT NULL\nORDER BY p.cohort_start, p.age_minute;",
+          "refId": "A"
+        }
+      ],
+      "title": "Serving Label Coverage Curves by Fixed Cohort",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "Cohort"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": false
+            }
+          }
+        }
+      ],
+      "type": "xychart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "description": "Latest twelve serving cohorts, including open/observing cohorts. Canonicalization is per model run, threshold, sample and serving snapshot/version.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "orange",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Coverage"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 194
+      },
+      "id": 64,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent_cohorts AS (\n  SELECT cohort_start\n  FROM label_maturity_cohort_age_metrics\n  WHERE maturity_scope = 'serving'\n  GROUP BY cohort_start\n  ORDER BY cohort_start DESC\n  LIMIT 12\n),\ncohort_points AS (\n  SELECT\n    m.*,\n    MIN(m.age_minute) FILTER (\n      WHERE m.is_observable = TRUE\n        AND m.label_coverage >= 1.0\n    ) OVER (\n      PARTITION BY m.maturity_scope, m.cohort_start\n    ) AS first_full_age\n  FROM label_maturity_cohort_age_metrics m\n  JOIN recent_cohorts r\n    ON r.cohort_start = m.cohort_start\n  WHERE m.maturity_scope = 'serving'\n),\neffective_points AS (\n  SELECT\n    p.*,\n    CASE\n      WHEN p.is_observable = TRUE THEN p.label_coverage\n      WHEN p.first_full_age IS NOT NULL\n        AND p.age_minute >= p.first_full_age THEN 1.0\n      ELSE NULL\n    END AS effective_coverage\n  FROM cohort_points p\n)\nSELECT\n  to_char(to_timestamp(p.cohort_start) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')\n    || '–' ||\n  to_char(to_timestamp(MAX(p.cohort_end) - 1.0) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS \"Cohort\",\n  MAX(p.cohort_status) AS \"Status\",\n  MAX(p.cohort_size_seen_at_refresh) AS \"Seen so far\",\n  MAX(p.cohort_size) AS \"Predictions\",\n  MAX(p.model_run_count) AS \"Model runs\",\n  MAX(p.age_minute) FILTER (WHERE p.is_observable) AS \"Observed through (min)\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 0))::DOUBLE PRECISION AS \"Coverage 0m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 1))::DOUBLE PRECISION AS \"Coverage 1m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 5))::DOUBLE PRECISION AS \"Coverage 5m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 10))::DOUBLE PRECISION AS \"Coverage 10m\",\n  CASE\n    WHEN MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 10) >= 1.0 THEN 0\n    ELSE MAX(p.unlabeled_count) FILTER (WHERE p.age_minute = 10)\n  END AS \"Unlabeled 10m\"\nFROM effective_points p\nGROUP BY p.cohort_start\nORDER BY p.cohort_start DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Serving Fixed-Cohort Summary",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "monitoring-postgres"
+      },
+      "description": "Rows are the latest fixed serving cohorts, including the open cohort; columns are prediction age 0–10 minutes. Future ages remain NULL.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "orange",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^[0-9]+m$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "color-background"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 203
+      },
+      "id": 65,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent_cohorts AS (\n  SELECT cohort_start\n  FROM label_maturity_cohort_age_metrics\n  WHERE maturity_scope = 'serving'\n  GROUP BY cohort_start\n  ORDER BY cohort_start DESC\n  LIMIT 12\n),\ncohort_points AS (\n  SELECT\n    m.*,\n    MIN(m.age_minute) FILTER (\n      WHERE m.is_observable = TRUE\n        AND m.label_coverage >= 1.0\n    ) OVER (\n      PARTITION BY m.maturity_scope, m.cohort_start\n    ) AS first_full_age\n  FROM label_maturity_cohort_age_metrics m\n  JOIN recent_cohorts r\n    ON r.cohort_start = m.cohort_start\n  WHERE m.maturity_scope = 'serving'\n),\neffective_points AS (\n  SELECT\n    p.*,\n    CASE\n      WHEN p.is_observable = TRUE THEN p.label_coverage\n      WHEN p.first_full_age IS NOT NULL\n        AND p.age_minute >= p.first_full_age THEN 1.0\n      ELSE NULL\n    END AS effective_coverage\n  FROM cohort_points p\n)\nSELECT\n  to_char(to_timestamp(p.cohort_start) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI')\n    || '–' ||\n  to_char(to_timestamp(MAX(p.cohort_end) - 1.0) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS \"Cohort\",\n  MAX(p.cohort_status) AS \"Status\",\n  MAX(p.cohort_size_seen_at_refresh) AS \"Seen\",\n  MAX(p.cohort_size) AS \"Final N\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 0))::DOUBLE PRECISION AS \"0m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 1))::DOUBLE PRECISION AS \"1m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 2))::DOUBLE PRECISION AS \"2m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 3))::DOUBLE PRECISION AS \"3m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 4))::DOUBLE PRECISION AS \"4m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 5))::DOUBLE PRECISION AS \"5m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 6))::DOUBLE PRECISION AS \"6m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 7))::DOUBLE PRECISION AS \"7m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 8))::DOUBLE PRECISION AS \"8m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 9))::DOUBLE PRECISION AS \"9m\",\n  (MAX(p.effective_coverage) FILTER (WHERE p.age_minute = 10))::DOUBLE PRECISION AS \"10m\"\nFROM effective_points p\nGROUP BY p.cohort_start\nORDER BY p.cohort_start DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Serving Cohort × Age Coverage Matrix",
+      "type": "table"
     }
   ],
   "preload": false,

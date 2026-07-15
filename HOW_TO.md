@@ -23,9 +23,6 @@ $  scripts/utility/download_secom.sh
 $ cd container
 $ docker-compose build
 $ docker-compose up -d
-
-# Reset local state from scratch. This deletes local volumes.
-$ docker-compose down -v ; docker-compose up -d
 ```
 
 ### 2. Produce feature, labels, predict requests
@@ -48,9 +45,18 @@ $ ./scripts/scenarios/scenario2.sh
 ### 3. Access the dashboard.
 - http://localhost:3000에 접속하셔서 `Monitoring` dashboard로 접근해주세요.
 - Kafka로 메세지는 공급되고 있습니다. 
+- 다음 영역에서 라벨 도착 속도를 확인할 수 있습니다.
+  - `Label Maturity / Fixed 10-Min Cohorts / Offline Training`
+  - `Label Maturity / Fixed 10-Min Cohorts / Serving Gate`
 
 ### 4. Check runtime evidence
 - Grafana에서 prediction count, latency, model metrics, Kafka lag가 증가하는지 확인합니다.
+- Airflow의 `refresh_label_maturity_metrics` 작업이 1분마다 자동으로 결과를 갱신하므로 수동으로 실행할 필요는 없습니다.
+- 10분 구간은 관측 대상을 모으는 시간입니다. 구간이 끝난 뒤에는 마지막 대상의 라벨도 최대 10분을 기다려야 하므로 관측이 계속됩니다.
+  - `open`: 10분 구간에 관측 대상을 모으고 있습니다.
+  - `observing`: 대상 수는 확정됐고 라벨 도착을 기다리고 있습니다.
+  - `complete`: 마지막 대상까지 10분 관측을 마쳤습니다.
+- 예를 들어 `00:01~00:10` 구간은 `00:11`부터 age 0분을 확인하고 `00:21`에 age 10분 관측을 마칩니다.
 - Useful URLs:
   - Grafana: http://localhost:3000
   - Airflow: http://localhost:8081

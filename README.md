@@ -14,6 +14,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 - Candidate 학습은 `serving_feature_snapshots`에서 `available_at` 기준 first-complete snapshot을 선택하고, `label_events` correction history를 cutoff 기준으로 결합합니다.
 - Candidate Gate는 현재 champion의 prediction decision을 `predicted_at` 기준으로 선택하고, exact serving snapshot/hash와 `cutoff_time`까지 도착한 최신 label revision을 검증합니다.
 - Grafana는 PostgreSQL metric table과 Prometheus Kafka metric을 함께 시각화합니다.
+- Grafana에서 오프라인 학습 데이터와 serving gate를 위한 데이터셋 구축에 필요한 Label Maturity를 10분 단위로 확인할 수 있습니다.
 
 ## 현재 범위
 
@@ -196,6 +197,7 @@ rollback_release_deployment
 cleanup_failed_candidate_alias
 create_fixed_reference_drift_baseline
 fixed_reference_drift_evaluator
+refresh_label_maturity_metrics
 ```
 
 ## Monitoring Feedback Loop
@@ -223,7 +225,26 @@ prediction_logs
     content check = feature_hash
 -> fixed-reference drift baseline / evaluator DAGs
 -> drift_reference_baselines / drift_reference_stats / drift_metrics
+
+feature snapshots + release predictions + label_events
+-> 10분 코호트별 label coverage 계산
+-> Airflow에서 1분마다 갱신
+-> Grafana Label Maturity 패널
 ```
+
+### 라벨 도착 속도 모니터링
+
+Label Maturity는 데이터가 준비된 뒤 라벨이 어느 정도 지나야 충분히 모이는지 확인하는 지표입니다. Final label을 별도로 정의하지 않고, 각 sample에 처음 도착한 라벨을 사용합니다.
+
+- Offline Training은 sample별 최초 completed feature snapshot이 준비된 시점부터 라벨 도착 시간을 계산합니다.
+- Serving은 release 예측이 발생한 시점부터 라벨 도착 시간을 계산합니다. 같은 예측이 반복 저장된 경우에는 최초 1건만 사용합니다.
+
+관측 대상을 `00:01~00:10`, `00:11~00:20`처럼 고정된 10분 구간으로 묶고, 각 구간에서 0분부터 10분까지 몇 퍼센트의 라벨이 도착했는지 표시합니다. 
+아직 진행 중인 구간은 현재까지 확인된 데이터 수만 보여주고, 최종 데이터 수와 미래 시점의 coverage는 비워 둡니다.
+10분 구간이 끝나면 대상 수는 확정되지만 라벨 관측은 계속됩니다. 예를 들어 `00:01~00:10` 구간은 `00:11`부터 age 0분을 확인하고, 마지막 대상도 10분을 기다린 `00:21`에 age 10분 관측을 마칩니다. 
+따라서 `open`은 대상을 모으는 상태, `observing`은 대상 수가 확정된 뒤 라벨을 기다리는 상태, `complete`는 10분 관측까지 끝난 상태를 의미합니다.
+
+Airflow의 `refresh_label_maturity_metrics` 작업이 이 결과를 1분마다 갱신합니다. 이 모니터링은 Offline Training과 Serving Gate에 사용할 적절한 Label Maturity 시간을 정하기 위한 분석 자료이며, 실제 Gate 설정을 자동으로 변경하지는 않습니다.
 
 Live model quality의 시간 계약은 다음과 같습니다.
 
@@ -285,6 +306,7 @@ PostgreSQL 주요 table:
 | Optional offline utility | `offline_feature_snapshots`, `offline_prediction_logs` |
 | Offline evaluation | `model_metrics` |
 | Monitoring | `live_model_quality_evaluations`, `prediction_window_metrics`, `drift_metrics` |
+| Label maturity | `label_maturity_cohort_age_metrics` materialized view |
 | Drift baseline | `drift_reference_baselines`, `drift_reference_stats` |
 | Deployment state | `model_deployment_requests`, `model_runtime_deployment_state`, `model_runtime_reload_events` |
 

@@ -30,7 +30,7 @@ with DAG(
                 format="date-time",
             ),
             "label_maturity_seconds": Param(
-                60,
+                120,
                 type="number",
                 minimum=0,
             ),
