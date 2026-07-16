@@ -433,6 +433,185 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
   CREATE INDEX IF NOT EXISTS idx_label_events_sample_available_revision
     ON label_events (sample_id, available_at, label_revision DESC);
 
+  CREATE MATERIALIZED VIEW IF NOT EXISTS label_maturity_cohort_age_metrics AS
+  WITH refresh_clock AS MATERIALIZED (
+    SELECT
+      EXTRACT(EPOCH FROM clock_timestamp())::DOUBLE PRECISION AS computed_at
+  ),
+  age_horizons AS (
+    SELECT
+      generate_series(0, 10)::INTEGER AS age_minute
+  ),
+  ranked_complete_snapshots AS (
+    SELECT
+      s.serving_snapshot_id,
+      s.sample_id,
+      s.snapshot_version,
+      s.available_at AS anchor_at,
+      ROW_NUMBER() OVER (
+        PARTITION BY s.sample_id
+        ORDER BY
+          s.available_at ASC,
+          s.snapshot_version ASC,
+          s.serving_snapshot_id ASC
+      ) AS snapshot_rank
+    FROM serving_feature_snapshots s
+    WHERE s.is_complete = TRUE
+      AND s.snapshot_status = 'complete'
+      AND s.available_at >= 0.0
+      AND s.available_at < 'Infinity'::DOUBLE PRECISION
+  ),
+  offline_anchors AS (
+    SELECT
+      'offline'::TEXT AS maturity_scope,
+      sample_id AS observation_id,
+      sample_id,
+      anchor_at,
+      NULL::TEXT AS model_run_id
+    FROM ranked_complete_snapshots
+    WHERE snapshot_rank = 1
+  ),
+  ranked_release_predictions AS (
+    SELECT
+      p.prediction_id,
+      p.sample_id,
+      p.model_run_id,
+      p.predicted_at AS anchor_at,
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          p.model_run_id,
+          p.threshold,
+          p.sample_id,
+          p.serving_snapshot_id,
+          p.snapshot_version
+        ORDER BY
+          p.predicted_at ASC,
+          p.prediction_id ASC
+      ) AS prediction_rank
+    FROM prediction_logs p
+    WHERE p.runtime_slot = 'release'
+      AND p.predicted_at >= 0.0
+      AND p.predicted_at < 'Infinity'::DOUBLE PRECISION
+  ),
+  serving_anchors AS (
+    SELECT
+      'serving'::TEXT AS maturity_scope,
+      prediction_id AS observation_id,
+      sample_id,
+      anchor_at,
+      model_run_id
+    FROM ranked_release_predictions
+    WHERE prediction_rank = 1
+  ),
+  first_label_arrivals AS (
+    SELECT
+      le.sample_id,
+      MIN(le.available_at) AS first_label_available_at
+    FROM label_events le
+    CROSS JOIN refresh_clock r
+    WHERE le.available_at <= r.computed_at
+      AND le.available_at >= 0.0
+      AND le.available_at < 'Infinity'::DOUBLE PRECISION
+    GROUP BY le.sample_id
+  ),
+  all_anchors AS (
+    SELECT * FROM offline_anchors
+    UNION ALL
+    SELECT * FROM serving_anchors
+  ),
+  anchored_observations AS (
+    SELECT
+      a.maturity_scope,
+      a.observation_id,
+      a.sample_id,
+      a.anchor_at,
+      a.model_run_id,
+      f.first_label_available_at,
+      FLOOR((a.anchor_at - 60.0) / 600.0) * 600.0 + 60.0 AS cohort_start
+    FROM all_anchors a
+    CROSS JOIN refresh_clock r
+    LEFT JOIN first_label_arrivals f
+      ON f.sample_id = a.sample_id
+    WHERE a.anchor_at <= r.computed_at
+  ),
+  cohort_age_counts AS (
+    SELECT
+      a.maturity_scope,
+      a.cohort_start,
+      a.cohort_start + 600.0 AS cohort_end,
+      h.age_minute,
+      COUNT(*) AS cohort_size_seen_at_refresh,
+      COUNT(*) FILTER (
+        WHERE a.first_label_available_at
+          <= a.anchor_at + h.age_minute * 60.0
+      ) AS labeled_count,
+      NULLIF(COUNT(DISTINCT a.model_run_id), 0) AS model_run_count,
+      r.computed_at,
+      r.computed_at >= a.cohort_start + 600.0 + h.age_minute * 60.0
+        AS is_observable,
+      CASE
+        WHEN r.computed_at < a.cohort_start + 600.0 THEN 'open'
+        WHEN r.computed_at < a.cohort_start + 1200.0 THEN 'observing'
+        ELSE 'complete'
+      END AS cohort_status
+    FROM anchored_observations a
+    CROSS JOIN age_horizons h
+    CROSS JOIN refresh_clock r
+    GROUP BY
+      a.maturity_scope,
+      a.cohort_start,
+      h.age_minute,
+      r.computed_at
+  )
+  SELECT
+    maturity_scope,
+    cohort_start,
+    cohort_end,
+    age_minute,
+    cohort_end + age_minute * 60.0 AS observable_at,
+    computed_at >= cohort_end AS cohort_closed,
+    cohort_size_seen_at_refresh,
+    CASE
+      WHEN computed_at >= cohort_end THEN cohort_size_seen_at_refresh
+      ELSE NULL
+    END AS cohort_size,
+    CASE
+      WHEN is_observable THEN labeled_count
+      ELSE NULL
+    END AS labeled_count,
+    CASE
+      WHEN is_observable THEN cohort_size_seen_at_refresh - labeled_count
+      ELSE NULL
+    END AS unlabeled_count,
+    CASE
+      WHEN is_observable THEN
+        ROUND(
+          labeled_count::NUMERIC / NULLIF(cohort_size_seen_at_refresh, 0),
+          6
+        )
+      ELSE NULL
+    END AS label_coverage,
+    model_run_count,
+    is_observable,
+    cohort_status,
+    computed_at
+  FROM cohort_age_counts
+  WITH DATA;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_label_maturity_scope_cohort_age
+    ON label_maturity_cohort_age_metrics (
+      maturity_scope,
+      cohort_start,
+      age_minute
+    );
+
+  CREATE INDEX IF NOT EXISTS idx_label_maturity_scope_recent
+    ON label_maturity_cohort_age_metrics (
+      maturity_scope,
+      cohort_start DESC,
+      age_minute
+    );
+
 CREATE TABLE IF NOT EXISTS drift_reference_baselines (
     baseline_id TEXT PRIMARY KEY,
 
