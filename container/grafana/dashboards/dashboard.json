@@ -818,7 +818,7 @@
       },
       "gridPos": {
         "h": 6,
-        "w": 4,
+        "w": 6,
         "x": 12,
         "y": 21
       },
@@ -929,10 +929,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 4,
-        "x": 16,
-        "y": 21
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
       },
       "id": 43,
       "options": {
@@ -975,6 +975,7 @@
           }
         }
       ],
+      "description": "각 점은 cutoff 시각 T에 계산된 Active Release의 슬라이딩 Recall입니다. 현재 설정에서는 [T-11분, T-1분)의 prediction을 사용합니다(10분 monitoring window, label maturity 60초). 평가 기준을 통과한 경우에만 Recall 값이 기록되며, Grafana 조회 시간 범위는 화면에 표시할 cutoff 시각만 선택합니다.",
       "title": "Fail Recall - Active Release",
       "type": "timeseries",
       "collapsed": false
@@ -1042,8 +1043,8 @@
       },
       "gridPos": {
         "h": 6,
-        "w": 4,
-        "x": 20,
+        "w": 6,
+        "x": 18,
         "y": 21
       },
       "id": 44,
@@ -1279,118 +1280,6 @@
       ],
       "title": "Active Release Confusion Matrix",
       "type": "barchart",
-      "collapsed": false
-    },
-    {
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "monitoring-postgres"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "axisSoftMax": 1,
-            "axisSoftMin": 0,
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 35
-      },
-      "id": 17,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "WITH evaluation_parameters AS (\n  SELECT\n    ${__from:date:seconds}::DOUBLE PRECISION AS window_start,\n    ${__to:date:seconds}::DOUBLE PRECISION AS cutoff_time\n),\nactive_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\ndecision_cohort AS (\n  SELECT\n    p.prediction_id,\n    p.sample_id,\n    p.model_run_id,\n    p.threshold,\n    p.serving_snapshot_id,\n    p.snapshot_version,\n    p.predicted_at,\n    p.predicted_value\n  FROM prediction_logs p\n  JOIN active_release r\n    ON p.model_run_id = r.active_model_run_id\n   AND p.threshold IS NOT DISTINCT FROM r.active_threshold\n  CROSS JOIN evaluation_parameters e\n  WHERE p.predicted_at >= e.window_start\n    AND p.predicted_at < e.cutoff_time\n    AND p.runtime_slot = 'release'\n    AND NOT EXISTS (\n      SELECT 1\n      FROM prediction_logs earlier\n      WHERE earlier.model_run_id = p.model_run_id\n        AND earlier.threshold = p.threshold\n        AND earlier.sample_id = p.sample_id\n        AND earlier.serving_snapshot_id = p.serving_snapshot_id\n        AND earlier.snapshot_version = p.snapshot_version\n        AND (\n          earlier.predicted_at < p.predicted_at\n          OR (\n            earlier.predicted_at = p.predicted_at\n            AND earlier.prediction_id < p.prediction_id\n          )\n        )\n    )\n),\ncohort_samples AS (\n  SELECT DISTINCT sample_id\n  FROM decision_cohort\n),\nranked_labels AS (\n  SELECT\n    le.label_event_id,\n    le.sample_id,\n    le.label_revision,\n    le.available_at,\n    le.actual_value,\n    ROW_NUMBER() OVER (\n      PARTITION BY le.sample_id\n      ORDER BY\n        le.label_revision DESC,\n        le.available_at DESC,\n        le.label_event_id DESC\n    ) AS label_rank\n  FROM label_events le\n  JOIN cohort_samples c\n    ON c.sample_id = le.sample_id\n  CROSS JOIN evaluation_parameters e\n  WHERE le.available_at <= e.cutoff_time\n),\nlabels_at_cutoff AS (\n  SELECT\n    label_event_id,\n    sample_id,\n    actual_value\n  FROM ranked_labels\n  WHERE label_rank = 1\n)\nSELECT\n  to_timestamp(floor(d.predicted_at / 60) * 60) AS time,\n  AVG(\n    CASE WHEN d.predicted_value = 1 THEN 1.0 ELSE 0.0 END\n  ) AS predicted_fail_ratio,\n  AVG(\n    CASE WHEN l.actual_value = 1 THEN 1.0 ELSE 0.0 END\n  ) FILTER (WHERE l.label_event_id IS NOT NULL) AS labeled_actual_fail_ratio\nFROM decision_cohort d\nLEFT JOIN labels_at_cutoff l\n  ON l.sample_id = d.sample_id\nGROUP BY floor(d.predicted_at / 60) * 60\nORDER BY time;",
-          "refId": "A",
-          "sql": {
-            "columns": [
-              {
-                "parameters": [],
-                "type": "function"
-              }
-            ],
-            "groupBy": [
-              {
-                "property": {
-                  "type": "string"
-                },
-                "type": "groupBy"
-              }
-            ],
-            "limit": 50
-          }
-        }
-      ],
-      "title": "Predicted vs Labeled Actual Fail Ratio - Active Release",
-      "type": "timeseries",
       "collapsed": false
     },
     {

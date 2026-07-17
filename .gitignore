@@ -50,3 +50,4 @@ mlflow.db
 *.tar
 *.tar.gz
 
+release-note
