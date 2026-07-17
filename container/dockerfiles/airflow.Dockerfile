@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir \
     "mlflow==3.14.0" \
     "numpy==1.26.0" \
     "pandas>=2.2,<3" \
+    "pyarrow>=16,<25" \
     "scikit-learn==1.9.0"
 
 ENV PYTHONPATH=/opt/airflow/mlops:/opt/airflow/mlops/scripts

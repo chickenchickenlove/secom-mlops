@@ -433,6 +433,34 @@ CREATE TABLE IF NOT EXISTS prediction_logs (
   CREATE INDEX IF NOT EXISTS idx_label_events_sample_available_revision
     ON label_events (sample_id, available_at, label_revision DESC);
 
+  CREATE TABLE IF NOT EXISTS dataset_builds (
+    dataset_id TEXT PRIMARY KEY,
+    dataset_type TEXT NOT NULL,
+    dataset_schema_version TEXT NOT NULL,
+    selector_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    cohort_start_time DOUBLE PRECISION NOT NULL,
+    cutoff_time DOUBLE PRECISION NOT NULL,
+    label_maturity_seconds DOUBLE PRECISION NOT NULL,
+    manifest_hash TEXT NOT NULL,
+    mlflow_run_id TEXT,
+    artifact_uri TEXT,
+    artifact_sha256 TEXT,
+    eligible_sample_count BIGINT NOT NULL,
+    labeled_sample_count BIGINT NOT NULL,
+    unlabeled_sample_count BIGINT NOT NULL,
+    label_coverage DOUBLE PRECISION NOT NULL,
+    fail_count BIGINT NOT NULL,
+    pass_count BIGINT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+      DEFAULT EXTRACT(EPOCH FROM clock_timestamp()),
+    updated_at DOUBLE PRECISION NOT NULL
+      DEFAULT EXTRACT(EPOCH FROM clock_timestamp()),
+    ready_at DOUBLE PRECISION,
+    error_message TEXT,
+    UNIQUE (dataset_type, manifest_hash)
+  );
+
   CREATE MATERIALIZED VIEW IF NOT EXISTS label_maturity_cohort_age_metrics AS
   WITH refresh_clock AS MATERIALIZED (
     SELECT
