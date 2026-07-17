@@ -11,6 +11,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 - `serving-api`는 Valkey에서 최신 online feature snapshot을 읽고 `model-gateway`를 통해 model runtime을 호출합니다.
 - `/predict-by-id` 예측 결과는 Kafka prediction event로 발행되고 `prediction-log-archiver`가 PostgreSQL `prediction_logs`에 저장합니다.
 - Airflow DAG가 candidate 학습, gate 평가, canary 배포, traffic split, release promotion, rollback을 제어합니다.
+- `build_periodic_training_dataset` DAG는 5분마다 point-in-time readiness를 확인하고, maturity만큼 이동한 Airflow data interval의 versioned training-source dataset을 영속화합니다.
 - Candidate 학습은 `serving_feature_snapshots`에서 `available_at` 기준 first-complete snapshot을 선택하고, `label_events` correction history를 cutoff 기준으로 결합합니다.
 - Candidate Gate는 현재 champion의 prediction decision을 `predicted_at` 기준으로 선택하고, exact serving snapshot/hash와 `cutoff_time`까지 도착한 최신 label revision을 검증합니다.
 - Grafana는 PostgreSQL metric table과 Prometheus Kafka metric을 함께 시각화합니다.
@@ -144,6 +145,33 @@ label_events.available_at <= T
 
 - Feature는 선택된 `serving_feature_snapshots.features_json`을 직접 사용합니다.
 - `snapshot_time`과 `measured_at`은 event/measurement metadata이며 availability cutoff가 아닙니다.
+
+### 주기적 Training-source Dataset
+
+`build_periodic_training_dataset` DAG는 5분마다 실행되며 Airflow의 scheduled run에 제공되는 `[data_interval_start, data_interval_end)` 논리적 구간을 label maturity `L`만큼 과거로 이동해 dataset cohort로 사용합니다.
+먼저 snapshot/label identity와 시간 metadata만 읽어 readiness를 계산하고, 실제로 새 dataset이 필요한 경우에만 `features_json` 전체를 읽습니다.
+
+```text
+S = data_interval_start - L
+E = data_interval_end - L
+
+sample별 first-complete serving snapshot
+AND S <= snapshot_available_at < E
+
+label_available_at <= data_interval_end
+-> sample별 max(label_revision)
+```
+
+- Dataset builder에는 1,000개 상한이 없습니다. 시간 범위에 속한 전체 eligible sample을 보존합니다.
+- 기본 readiness는 labeled sample 1,000개 이상, label coverage 0.95 이상, fail/pass 각 20개 이상입니다.
+- `dataset.parquet`에는 labeled와 unlabeled row가 모두 들어가며 label 컬럼은 nullable입니다.
+- Dataset identity는 정확한 snapshot/label membership과 stable selector contract로 계산합니다.
+- Artifact는 MLflow `secom-training-datasets` experiment에 `dataset.parquet`, `manifest.json`, `stats.json`으로 저장하고 PostgreSQL `dataset_builds`에 상태와 URI를 기록합니다.
+- 같은 MLflow run에 Dataset input metadata를 `training_source` context로 기록합니다. Dataset name은 `dataset_id`, digest는 manifest SHA-256에서 파생하며, target은 nullable `actual_value`입니다. 전체 manifest hash와 artifact URI/hash는 input tag로 연결합니다.
+- Readiness 미달은 Airflow `SKIPPED`로 종료합니다. 동일 membership의 READY dataset이 이미 있는 경우에도 artifact를 재생성하지 않고 `SKIPPED`로 종료합니다.
+
+Dataset builder의 지원되는 유일 실행 경로는 Airflow DAG입니다. DAG는 `max_active_runs=1`로 dataset build를 직렬화합니다. 직접 CLI 실행, 다중 writer는 현재 지원 범위에서 제외합니다. Distributed lock이나 lease, active/stale `BUILDING` 판별은 구현하지 않았으며, 후속 Airflow 실행은 기존 non-READY catalog row를 다시 claim할 수 있습니다.
+현재 candidate trainer는 이 artifact를 아직 읽지 않고 기존 point-in-time SQL로 직접 개발 원본을 구성합니다. Dataset ID 기반 학습과 labeled row 중 최신 1,000개 선택은 후속 범위입니다.
 
 ### Candidate와 Champion의 개발 원본
 
@@ -361,7 +389,9 @@ fdc-feature-assembler/                 feature patch aggregation
 fdc-feature-materializer/              Kafka -> Valkey + serving_feature_snapshots
 label-archiver/                        Kafka -> label_events
 prediction-log-archiver/               Kafka -> prediction_logs
+secom_mlops/datasets/                  versioned dataset contract and persistence
 secom_mlops/serving/                   serving API and model runtime
+scripts/datasets/                      scheduled dataset CLI entry points
 scripts/training/                      candidate training scripts
 scripts/monitoring/                    prediction-window, live-quality, offline-model, drift evaluators
 scripts/deployment/                    deployment and rollback helpers
