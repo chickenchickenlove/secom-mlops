@@ -1,9 +1,7 @@
 import argparse
-import os
 from typing import Any
 
 import mlflow
-import numpy as np
 import pandas as pd
 from mlflow.tracking import MlflowClient
 from sklearn.metrics import (
@@ -16,10 +14,21 @@ from sklearn.metrics import (
     recall_score,
 )
 
-from secom_mlops.monitor.db import connect
-from secom_mlops.monitor.deployments import (
-    build_deployment_request_row,
-    insert_deployment_request,
+from secom_mlops.datasets.serving_gate_dataset import (
+    DECISION_SELECTION,
+    DEFAULT_MIN_LABELED_DECISIONS,
+    NEGATIVE_CLASS,
+    POSITIVE_CLASS,
+)
+from secom_mlops.datasets.serving_gate_dataset_loader import (
+    load_serving_gate_dataset,
+)
+from secom_mlops.monitor.serving_gate_evaluations import (
+    COMPARISON_TYPE,
+    DEFAULT_EXPERIMENT_NAME,
+    EVALUATION_SCHEMA_VERSION,
+    LATEST_EVALUATION_RUN_ID_TAG,
+    evaluation_reason_json,
 )
 from secom_mlops_common.config.mlflow import (
     DEFAULT_CANDIDATE_ALIAS,
@@ -27,101 +36,46 @@ from secom_mlops_common.config.mlflow import (
     resolve_model_name,
     resolve_tracking_uri,
 )
-from secom_mlops_common.schemas.secom import (
-    FEATURE_KEY_SET,
-    FEATURE_KEYS,
-    MODEL_COLUMNS,
-    NUM_FEATURES,
-    normalize_feature_value,
-    parse_feature_object,
-)
-
-POSITIVE_CLASS = 1
-NEGATIVE_CLASS = -1
-DEFAULT_MAX_DECISIONS = 1000
-DECISION_SELECTION = "latest_champion_decisions"
+from secom_mlops_common.schemas.secom import MODEL_COLUMNS
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset-id", required=True)
     parser.add_argument("--tracking-uri", default=None)
     parser.add_argument("--model-name", default=resolve_model_name())
     parser.add_argument("--candidate-alias", default=DEFAULT_CANDIDATE_ALIAS)
     parser.add_argument("--champion-alias", default=DEFAULT_CHAMPION_ALIAS)
     parser.add_argument("--candidate-version", default=None)
     parser.add_argument("--champion-version", default=None)
-
-    parser.add_argument("--cohort-start-time", type=float, required=True)
-    parser.add_argument("--cutoff-time", type=float, required=True)
-    parser.add_argument("--label-maturity-seconds", type=float, required=True)
     parser.add_argument(
-        "--max-decisions",
-        "--limit",
-        dest="max_decisions",
-        type=int,
-        default=DEFAULT_MAX_DECISIONS,
+        "--evaluation-experiment-name",
+        default=DEFAULT_EXPERIMENT_NAME,
     )
-
-    parser.add_argument("--min-decisions", type=int, default=500)
-    parser.add_argument("--min-label-coverage", type=float, default=0.95)
-    parser.add_argument("--min-fail-samples", type=int, default=20)
-    parser.add_argument("--min-pass-samples", type=int, default=20)
-
     parser.add_argument("--primary-metric", default="fail_f1")
     parser.add_argument("--min-primary-delta", type=float, default=0.0)
     parser.add_argument("--min-recall-delta", type=float, default=-0.02)
     parser.add_argument("--min-precision-delta", type=float, default=-0.05)
     parser.add_argument("--set-tags", action="store_true")
     parser.add_argument("--fail-on-gate-failure", action="store_true")
-    parser.add_argument("--record-deployment-request", action="store_true")
-    parser.add_argument("--deployment-approval-status", default="approved")
-    parser.add_argument("--deployment-notes", default=None)
-    parser.add_argument("--deployment-requested-by", default=os.getenv("USER"))
-    parser.add_argument("--deployment-approved-by", default=None)
     return parser.parse_args()
 
 
-def validate_args(args: argparse.Namespace) -> None:
-    numeric_times = {
-        "cohort_start_time": args.cohort_start_time,
-        "cutoff_time": args.cutoff_time,
-        "label_maturity_seconds": args.label_maturity_seconds,
-    }
-    for name, value in numeric_times.items():
-        if not np.isfinite(value) or value < 0.0:
-            raise ValueError(f"{name} must be finite and >= 0")
-
-    cohort_end_time = args.cutoff_time - args.label_maturity_seconds
-    if cohort_end_time <= args.cohort_start_time:
-        raise ValueError(
-            "cutoff_time - label_maturity_seconds must be greater than "
-            "cohort_start_time"
-        )
-
-    if args.max_decisions <= 0:
-        raise ValueError("max_decisions must be > 0")
-    if args.min_decisions <= 0:
-        raise ValueError("min_decisions must be > 0")
-    if args.min_decisions > args.max_decisions:
-        raise ValueError("min_decisions must be <= max_decisions")
-    if not 0.0 <= args.min_label_coverage <= 1.0:
-        raise ValueError("min_label_coverage must be between 0 and 1")
-    if args.min_fail_samples <= 0:
-        raise ValueError("min_fail_samples must be > 0")
-    if args.min_pass_samples <= 0:
-        raise ValueError("min_pass_samples must be > 0")
-
-
-def resolve_model(client: MlflowClient, model_name: str, alias: str, version: str | None) -> dict[str, Any]:
+def resolve_model(
+        client: MlflowClient,
+        model_name: str,
+        alias: str,
+        version: str | None,
+) -> dict[str, Any]:
     if version:
         model_version = client.get_model_version(model_name, version)
-        model_uri = f"models:/{model_name}/{model_version.version}"
         resolved_alias = None
     else:
         model_version = client.get_model_version_by_alias(model_name, alias)
-        model_uri = f"models:/{model_name}@{alias}"
         resolved_alias = alias
 
+    # Pin the resolved version. An alias may move while the Gate is running.
+    model_uri = f"models:/{model_name}/{model_version.version}"
     return {
         "model_uri": model_uri,
         "model": mlflow.pyfunc.load_model(model_uri),
@@ -131,310 +85,75 @@ def resolve_model(client: MlflowClient, model_name: str, alias: str, version: st
     }
 
 
-def load_labeled_serving_decisions(
-        args: argparse.Namespace,
-        champion_model_run_id: str,
-) -> tuple[pd.DataFrame, pd.Series, list[str], dict[str, Any]]:
-    cohort_end_time = args.cutoff_time - args.label_maturity_seconds
-    params: dict[str, Any] = {
-        "champion_model_run_id": champion_model_run_id,
-        "cohort_start_time": args.cohort_start_time,
-        "cohort_end_time": cohort_end_time,
-        "cutoff_time": args.cutoff_time,
-        "max_decisions": args.max_decisions,
-    }
-
-    sql = f"""
-    WITH canonical_predictions AS (
-      SELECT
-        p.prediction_id,
-        p.request_id,
-        p.sample_id,
-        p.serving_snapshot_id,
-        p.snapshot_version,
-        p.feature_hash,
-        p.model_run_id,
-        p.runtime_slot,
-        p.threshold,
-        p.predicted_at,
-        EXISTS (
-          SELECT 1
-          FROM prediction_logs conflicting
-          WHERE conflicting.model_run_id = p.model_run_id
-            AND conflicting.threshold = p.threshold
-            AND conflicting.sample_id = p.sample_id
-            AND conflicting.serving_snapshot_id = p.serving_snapshot_id
-            AND conflicting.snapshot_version = p.snapshot_version
-            AND conflicting.feature_hash <> p.feature_hash
-        ) AS has_conflicting_feature_hash
-      FROM prediction_logs p
-      WHERE p.model_run_id = %(champion_model_run_id)s
-        AND NOT EXISTS (
-          SELECT 1
-          FROM prediction_logs earlier
-          WHERE earlier.model_run_id = p.model_run_id
-            AND earlier.threshold = p.threshold
-            AND earlier.sample_id = p.sample_id
-            AND earlier.serving_snapshot_id = p.serving_snapshot_id
-            AND earlier.snapshot_version = p.snapshot_version
-            AND (
-              earlier.predicted_at < p.predicted_at
-              OR (
-                earlier.predicted_at = p.predicted_at
-                AND earlier.prediction_id < p.prediction_id
-              )
-            )
+def validate_distinct_models(
+        candidate: dict[str, Any],
+        champion: dict[str, Any],
+) -> None:
+    if candidate["model_run_id"] == champion["model_run_id"]:
+        raise RuntimeError(
+            "candidate and champion must be different models: "
+            f"model_run_id={candidate['model_run_id']}"
         )
-    ),
-    latest_prediction_cohort AS (
-      SELECT *
-      FROM canonical_predictions
-      WHERE predicted_at >= %(cohort_start_time)s
-        AND predicted_at < %(cohort_end_time)s
-      ORDER BY predicted_at DESC, prediction_id DESC
-      LIMIT %(max_decisions)s
-    ),
-    prediction_cohort AS (
-      SELECT *
-      FROM latest_prediction_cohort
-      ORDER BY predicted_at ASC, prediction_id ASC
-    ),
-    cohort_samples AS (
-      SELECT DISTINCT sample_id
-      FROM prediction_cohort
-    ),
-    ranked_labels AS (
-      SELECT
-        le.label_event_id,
-        le.sample_id,
-        le.label_revision,
-        le.measured_at,
-        le.available_at,
-        le.actual_value,
-        le.actual_label,
-        ROW_NUMBER() OVER (
-          PARTITION BY le.sample_id
-          ORDER BY
-            le.label_revision DESC,
-            le.available_at DESC,
-            le.label_event_id DESC
-        ) AS label_rank
-      FROM label_events le
-      JOIN cohort_samples c
-        ON c.sample_id = le.sample_id
-      WHERE le.available_at <= %(cutoff_time)s
-    ),
-    labels_at_cutoff AS (
-      SELECT
-        label_event_id,
-        sample_id,
-        label_revision,
-        measured_at,
-        available_at,
-        actual_value,
-        actual_label
-      FROM ranked_labels
-      WHERE label_rank = 1
-    )
-    SELECT
-      p.prediction_id,
-      p.request_id,
-      p.sample_id,
-      p.serving_snapshot_id,
-      p.snapshot_version,
-      p.feature_hash AS prediction_feature_hash,
-      p.model_run_id,
-      p.runtime_slot,
-      p.threshold AS source_threshold,
-      p.predicted_at,
-      p.has_conflicting_feature_hash,
-      s.serving_snapshot_id AS stored_serving_snapshot_id,
-      s.sample_id AS stored_sample_id,
-      s.snapshot_version AS stored_snapshot_version,
-      s.feature_hash AS snapshot_feature_hash,
-      s.snapshot_status,
-      s.is_complete,
-      s.feature_count,
-      s.missing_count,
-      s.features_json,
-      s.available_at AS snapshot_available_at,
-      l.label_event_id,
-      l.label_revision,
-      l.measured_at AS label_measured_at,
-      l.available_at AS label_available_at,
-      l.actual_value,
-      l.actual_label
-    FROM prediction_cohort p
-    LEFT JOIN serving_feature_snapshots s
-      ON s.serving_snapshot_id = p.serving_snapshot_id
-     AND s.sample_id = p.sample_id
-     AND s.snapshot_version = p.snapshot_version
-    LEFT JOIN labels_at_cutoff l
-      ON l.sample_id = p.sample_id
-    ORDER BY p.predicted_at, p.prediction_id;
-    """
 
-    with connect() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(sql, params)
-            columns = [description.name for description in cursor.description]
-            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-    labeled_prediction_ids: list[str] = []
-    feature_rows: list[list[float | None]] = []
-    labels: list[int] = []
-    decision_times: list[float] = []
-    snapshot_available_times: list[float] = []
-    missing_counts: list[int] = []
-    label_revisions: list[int] = []
-    label_available_times: list[float] = []
+def load_labeled_serving_decisions(
+        dataset_id: str,
+        *,
+        tracking_uri: str,
+) -> tuple[pd.DataFrame, pd.Series, list[str], dict[str, Any]]:
+    loaded = load_serving_gate_dataset(dataset_id, tracking_uri=tracking_uri)
+    frame = loaded.frame
+    labeled = frame["label_event_id"].notna()
+    labeled_frame = frame.loc[labeled].copy()
+    labeled_count = len(labeled_frame)
+    if labeled_count < DEFAULT_MIN_LABELED_DECISIONS:
+        raise RuntimeError(
+            "persisted serving-gate dataset has too few labeled decisions: "
+            f"required={DEFAULT_MIN_LABELED_DECISIONS} actual={labeled_count}"
+        )
 
-    for row in rows:
-        prediction_id = str(row["prediction_id"])
-        sample_id = str(row["sample_id"])
-        serving_snapshot_id = str(row["serving_snapshot_id"])
-        snapshot_version = int(row["snapshot_version"])
-        decision_times.append(float(row["predicted_at"]))
+    y_true = labeled_frame["actual_value"].astype("int64")
+    actual_values = set(y_true.unique())
+    if not actual_values.issubset({NEGATIVE_CLASS, POSITIVE_CLASS}):
+        raise RuntimeError(
+            f"persisted serving-gate dataset has invalid targets: {sorted(actual_values)}"
+        )
+    features = labeled_frame.loc[:, list(MODEL_COLUMNS)].astype("float64")
+    prediction_ids = labeled_frame["prediction_id"].astype(str).tolist()
 
-        if row["has_conflicting_feature_hash"]:
-            raise RuntimeError(
-                "repeated prediction decision has conflicting feature_hash values: "
-                f"prediction_id={prediction_id} "
-                f"sample_id={sample_id} "
-                f"serving_snapshot_id={serving_snapshot_id} "
-                f"snapshot_version={snapshot_version}"
-            )
-
-        if row["stored_serving_snapshot_id"] is None:
-            raise RuntimeError(
-                "prediction decision has no exact serving snapshot: "
-                f"prediction_id={prediction_id} "
-                f"sample_id={sample_id} "
-                f"serving_snapshot_id={serving_snapshot_id} "
-                f"snapshot_version={snapshot_version}"
-            )
-
-        prediction_feature_hash = str(row["prediction_feature_hash"])
-        snapshot_feature_hash = str(row["snapshot_feature_hash"])
-        if prediction_feature_hash != snapshot_feature_hash:
-            raise RuntimeError(
-                "prediction and serving snapshot feature_hash mismatch: "
-                f"prediction_id={prediction_id} "
-                f"serving_snapshot_id={serving_snapshot_id} "
-                f"prediction_feature_hash={prediction_feature_hash} "
-                f"snapshot_feature_hash={snapshot_feature_hash}"
-            )
-
-        if row["snapshot_status"] != "complete" or row["is_complete"] is not True:
-            raise RuntimeError(
-                "prediction decision must reference a complete serving snapshot: "
-                f"prediction_id={prediction_id} "
-                f"serving_snapshot_id={serving_snapshot_id} "
-                f"snapshot_status={row['snapshot_status']} "
-                f"is_complete={row['is_complete']}"
-            )
-
-        feature_count = int(row["feature_count"])
-        if feature_count != NUM_FEATURES:
-            raise RuntimeError(
-                "complete serving snapshot must contain all feature keys: "
-                f"prediction_id={prediction_id} "
-                f"serving_snapshot_id={serving_snapshot_id} "
-                f"feature_count={feature_count}"
-            )
-
-        raw_features = parse_feature_object(row["features_json"], sample_id=sample_id)
-        actual_feature_keys = set(raw_features)
-        unexpected_feature_keys = sorted(actual_feature_keys - FEATURE_KEY_SET)
-        missing_feature_keys = sorted(FEATURE_KEY_SET - actual_feature_keys)
-        if unexpected_feature_keys:
-            raise RuntimeError(
-                "unexpected feature keys in serving snapshot: "
-                f"prediction_id={prediction_id} "
-                f"keys={unexpected_feature_keys[:5]}"
-            )
-        if missing_feature_keys:
-            raise RuntimeError(
-                "missing feature keys in serving snapshot: "
-                f"prediction_id={prediction_id} "
-                f"keys={missing_feature_keys[:5]}"
-            )
-
-        normalized_features = [
-            normalize_feature_value(
-                raw_features[key],
-                sample_id=sample_id,
-                feature_key=key,
-            )
-            for key in FEATURE_KEYS
-        ]
-        stored_missing_count = int(row["missing_count"])
-        computed_missing_count = sum(value is None for value in normalized_features)
-        if stored_missing_count != computed_missing_count:
-            raise RuntimeError(
-                "serving snapshot missing_count mismatch: "
-                f"prediction_id={prediction_id} "
-                f"serving_snapshot_id={serving_snapshot_id} "
-                f"stored={stored_missing_count} "
-                f"computed={computed_missing_count}"
-            )
-
-        snapshot_available_times.append(float(row["snapshot_available_at"]))
-        missing_counts.append(stored_missing_count)
-
-        if row["label_event_id"] is None:
-            continue
-
-        labeled_prediction_ids.append(prediction_id)
-        feature_rows.append(normalized_features)
-        labels.append(int(row["actual_value"]))
-        label_revisions.append(int(row["label_revision"]))
-        label_available_times.append(float(row["label_available_at"]))
-
-    x = pd.DataFrame(feature_rows, columns=list(MODEL_COLUMNS), dtype="float64")
-    y = pd.Series(labels, dtype="int64")
-
-    decision_count = len(rows)
-    labeled_decision_count = len(labeled_prediction_ids)
+    identity = loaded.manifest["identity"]
+    build_context = loaded.manifest["build_context"]
+    stats = loaded.manifest["stats"]
     metadata = {
-        "cohort_start_time": args.cohort_start_time,
-        "cohort_end_time": cohort_end_time,
-        "cutoff_time": args.cutoff_time,
-        "label_maturity_seconds": args.label_maturity_seconds,
-        "decision_selection": DECISION_SELECTION,
-        "max_decisions": args.max_decisions,
-        "champion_source_model_run_id": champion_model_run_id,
-        "decision_count": decision_count,
-        "labeled_decision_count": labeled_decision_count,
-        "unlabeled_decision_count": decision_count - labeled_decision_count,
-        "label_coverage": (
-            0.0 if decision_count == 0 else labeled_decision_count / decision_count
-        ),
-        "fail_count": int((y == POSITIVE_CLASS).sum()) if len(y) else 0,
-        "pass_count": int((y == NEGATIVE_CLASS).sum()) if len(y) else 0,
-        "decision_time_min": min(decision_times) if decision_times else None,
-        "decision_time_max": max(decision_times) if decision_times else None,
-        "snapshot_available_at_min": (
-            min(snapshot_available_times) if snapshot_available_times else None
-        ),
-        "snapshot_available_at_max": (
-            max(snapshot_available_times) if snapshot_available_times else None
-        ),
-        "missing_count_avg": float(np.mean(missing_counts)) if missing_counts else None,
-        "label_revision_min": min(label_revisions) if label_revisions else None,
-        "label_revision_max": max(label_revisions) if label_revisions else None,
-        "label_available_at_min": (
-            min(label_available_times) if label_available_times else None
-        ),
-        "label_available_at_max": (
-            max(label_available_times) if label_available_times else None
-        ),
-        "runtime_slots": sorted({str(row["runtime_slot"]) for row in rows}),
-        "source_thresholds": sorted({float(row["source_threshold"]) for row in rows}),
-        "first_sample_id": str(rows[0]["sample_id"]) if rows else None,
-        "last_sample_id": str(rows[-1]["sample_id"]) if rows else None,
+        "dataset_id": loaded.dataset_id,
+        "manifest_hash": loaded.manifest_hash,
+        "artifact_sha256": loaded.artifact_sha256,
+        "dataset_mlflow_run_id": loaded.mlflow_run_id,
+        "artifact_uri": loaded.artifact_uri,
+        "cohort_start_time": identity["cohort_start_time"],
+        "cohort_end_time": identity["cohort_end_time"],
+        "cutoff_time": build_context["cutoff_time"],
+        "label_maturity_seconds": identity["label_maturity_seconds"],
+        "decision_selection": identity["decision_selection"],
+        "decision_count": int(stats["decision_count"]),
+        "labeled_decision_count": int(stats["labeled_decision_count"]),
+        "unlabeled_decision_count": int(stats["unlabeled_decision_count"]),
+        "unique_sample_count": int(stats["unique_sample_count"]),
+        "label_coverage": float(stats["label_coverage"]),
+        "fail_count": int(stats["fail_count"]),
+        "pass_count": int(stats["pass_count"]),
+        "decision_time_min": stats["decision_time_min"],
+        "decision_time_max": stats["decision_time_max"],
+        "snapshot_available_at_min": stats["snapshot_available_at_min"],
+        "snapshot_available_at_max": stats["snapshot_available_at_max"],
+        "label_available_at_min": stats["label_available_at_min"],
+        "label_available_at_max": stats["label_available_at_max"],
+        "source_model_run_ids": stats["source_model_run_ids"],
+        "source_thresholds": stats["source_thresholds"],
+        "first_sample_id": str(frame.iloc[0]["sample_id"]),
+        "last_sample_id": str(frame.iloc[-1]["sample_id"]),
     }
-    return x, y, labeled_prediction_ids, metadata
+    return features, y_true, prediction_ids, metadata
 
 
 def predict_model(model_bundle: dict[str, Any], features: pd.DataFrame) -> pd.DataFrame:
@@ -444,7 +163,6 @@ def predict_model(model_bundle: dict[str, Any], features: pd.DataFrame) -> pd.Da
 
     if "fail_probability" not in predictions.columns:
         raise ValueError("model output missing fail_probability")
-
     if "prediction" in predictions.columns:
         predicted_value = predictions["prediction"]
     elif "predicted_value" in predictions.columns:
@@ -458,27 +176,35 @@ def predict_model(model_bundle: dict[str, Any], features: pd.DataFrame) -> pd.Da
     })
 
 
-def evaluate_predictions(y_true: pd.Series, prediction_frame: pd.DataFrame) -> dict[str, float | int | None]:
+def evaluate_predictions(
+        y_true: pd.Series,
+        prediction_frame: pd.DataFrame,
+) -> dict[str, float | int | None]:
     y_pred = prediction_frame["predicted_value"].astype(int)
     fail_probability = prediction_frame["fail_probability"].astype(float)
-
     matrix = confusion_matrix(y_true, y_pred, labels=[NEGATIVE_CLASS, POSITIVE_CLASS])
     tn, fp, fn, tp = [int(value) for value in matrix.ravel()]
     n_fail_samples = int((y_true == POSITIVE_CLASS).sum())
-
-    pr_auc = None
-    if n_fail_samples > 0:
-        pr_auc = float(average_precision_score(y_true, fail_probability, pos_label=POSITIVE_CLASS))
-
+    pr_auc = (
+        float(average_precision_score(y_true, fail_probability, pos_label=POSITIVE_CLASS))
+        if n_fail_samples > 0
+        else None
+    )
     return {
         "n_samples": int(len(y_true)),
         "n_fail_samples": n_fail_samples,
         "n_pass_samples": int((y_true == NEGATIVE_CLASS).sum()),
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
-        "fail_precision": float(precision_score(y_true, y_pred, pos_label=POSITIVE_CLASS, zero_division=0)),
-        "fail_recall": float(recall_score(y_true, y_pred, pos_label=POSITIVE_CLASS, zero_division=0)),
-        "fail_f1": float(f1_score(y_true, y_pred, pos_label=POSITIVE_CLASS, zero_division=0)),
+        "fail_precision": float(precision_score(
+            y_true, y_pred, pos_label=POSITIVE_CLASS, zero_division=0
+        )),
+        "fail_recall": float(recall_score(
+            y_true, y_pred, pos_label=POSITIVE_CLASS, zero_division=0
+        )),
+        "fail_f1": float(f1_score(
+            y_true, y_pred, pos_label=POSITIVE_CLASS, zero_division=0
+        )),
         "pr_auc": pr_auc,
         "true_negative": tn,
         "false_positive": fp,
@@ -502,7 +228,11 @@ def metric_names() -> list[str]:
     ]
 
 
-def metric_delta(candidate_metrics: dict[str, Any], champion_metrics: dict[str, Any], metric_name: str) -> float | None:
+def metric_delta(
+        candidate_metrics: dict[str, Any],
+        champion_metrics: dict[str, Any],
+        metric_name: str,
+) -> float | None:
     candidate_value = candidate_metrics.get(metric_name)
     champion_value = champion_metrics.get(metric_name)
     if candidate_value is None or champion_value is None:
@@ -519,45 +249,28 @@ def evaluate_gate(
         min_precision_delta: float,
 ) -> tuple[str, list[str]]:
     reasons = []
-
     primary_delta = metric_delta(candidate_metrics, champion_metrics, primary_metric)
     if primary_delta is None:
         reasons.append(f"primary metric unavailable: {primary_metric}")
     elif primary_delta < min_primary_delta:
         reasons.append(
-            f"{primary_metric} delta below gate: delta={primary_delta:.6f} required>={min_primary_delta:.6f}")
+            f"{primary_metric} delta below gate: delta={primary_delta:.6f} "
+            f"required>={min_primary_delta:.6f}"
+        )
 
     recall_delta = metric_delta(candidate_metrics, champion_metrics, "fail_recall")
     if recall_delta is not None and recall_delta < min_recall_delta:
-        reasons.append(f"fail_recall regression too large: delta={recall_delta:.6f} required>={min_recall_delta:.6f}")
-
+        reasons.append(
+            "fail_recall regression too large: "
+            f"delta={recall_delta:.6f} required>={min_recall_delta:.6f}"
+        )
     precision_delta = metric_delta(candidate_metrics, champion_metrics, "fail_precision")
     if precision_delta is not None and precision_delta < min_precision_delta:
         reasons.append(
-            f"fail_precision regression too large: delta={precision_delta:.6f} required>={min_precision_delta:.6f}")
-
+            "fail_precision regression too large: "
+            f"delta={precision_delta:.6f} required>={min_precision_delta:.6f}"
+        )
     return ("failed" if reasons else "passed"), reasons
-
-
-def insufficient_data_reasons(metadata: dict[str, Any], args: argparse.Namespace) -> list[str]:
-    reasons = []
-    if metadata["decision_count"] < args.min_decisions:
-        reasons.append(
-            "not enough champion prediction decisions: "
-            f"required={args.min_decisions} "
-            f"actual={metadata['decision_count']}"
-        )
-    if metadata["label_coverage"] < args.min_label_coverage:
-        reasons.append(
-            "label coverage below gate: "
-            f"required={args.min_label_coverage:.6f} "
-            f"actual={metadata['label_coverage']:.6f}"
-        )
-    if metadata["fail_count"] < args.min_fail_samples:
-        reasons.append(f"not enough fail samples: required={args.min_fail_samples} actual={metadata['fail_count']}")
-    if metadata["pass_count"] < args.min_pass_samples:
-        reasons.append(f"not enough pass samples: required={args.min_pass_samples} actual={metadata['pass_count']}")
-    return reasons
 
 
 def format_metric(value: Any) -> str:
@@ -568,43 +281,112 @@ def format_metric(value: Any) -> str:
     return str(value)
 
 
-def set_candidate_tags(
-        client: MlflowClient,
-        model_name: str,
-        candidate_version: str,
+def log_evaluation_run(
+        *,
+        experiment_name: str,
         status: str,
         reasons: list[str],
         args: argparse.Namespace,
         metadata: dict[str, Any],
-        candidate_metrics: dict[str, Any] | None = None,
-        champion_metrics: dict[str, Any] | None = None,
-) -> None:
-    tags = {
-        "candidate_serving_snapshot_eval_status": status,
-        "candidate_serving_snapshot_eval_reason": " | ".join(reasons) if reasons else "ok",
-        "candidate_serving_snapshot_eval_cohort_start_time": str(args.cohort_start_time),
-        "candidate_serving_snapshot_eval_cohort_end_time": str(metadata["cohort_end_time"]),
-        "candidate_serving_snapshot_eval_cutoff_time": str(args.cutoff_time),
-        "candidate_serving_snapshot_eval_label_maturity_seconds": str(args.label_maturity_seconds),
-        "candidate_serving_snapshot_eval_decision_selection": metadata["decision_selection"],
-        "candidate_serving_snapshot_eval_max_decisions": str(metadata["max_decisions"]),
-        "candidate_serving_snapshot_eval_decisions": str(metadata["decision_count"]),
-        "candidate_serving_snapshot_eval_labeled_decisions": str(metadata["labeled_decision_count"]),
-        "candidate_serving_snapshot_eval_label_coverage": str(metadata["label_coverage"]),
-        "candidate_serving_snapshot_eval_fail_samples": str(metadata["fail_count"]),
-        "candidate_serving_snapshot_eval_pass_samples": str(metadata["pass_count"]),
-    }
+        candidate: dict[str, Any],
+        champion: dict[str, Any],
+        candidate_metrics: dict[str, Any],
+        champion_metrics: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    experiment_id = (
+        mlflow.create_experiment(experiment_name)
+        if experiment is None
+        else experiment.experiment_id
+    )
 
-    if candidate_metrics is not None and champion_metrics is not None:
+    with mlflow.start_run(
+            experiment_id=experiment_id,
+            run_name=(
+                f"candidate_v{candidate['model_version']}_"
+                f"{metadata['dataset_id']}"
+            ),
+            tags={
+                "evaluation_schema_version": EVALUATION_SCHEMA_VERSION,
+                "comparison_type": COMPARISON_TYPE,
+                "dataset_id": metadata["dataset_id"],
+                "candidate_model_version": candidate["model_version"],
+                "champion_model_version": champion["model_version"],
+            },
+    ) as run:
+        evaluation_run_id = str(run.info.run_id)
+        summary = build_eval_summary(
+            args=args,
+            metadata=metadata,
+            candidate=candidate,
+            champion=champion,
+            status=status,
+            reasons=reasons,
+            candidate_metrics=candidate_metrics,
+            champion_metrics=champion_metrics,
+        )
+        summary["evaluation_run_id"] = evaluation_run_id
+        mlflow.log_params({
+            "evaluation_schema_version": EVALUATION_SCHEMA_VERSION,
+            "comparison_type": COMPARISON_TYPE,
+            "evaluation_status": status,
+            "evaluation_reasons": evaluation_reason_json(reasons),
+            "model_name": args.model_name,
+            "dataset_id": metadata["dataset_id"],
+            "dataset_manifest_hash": metadata["manifest_hash"],
+            "dataset_artifact_sha256": metadata["artifact_sha256"],
+            "dataset_mlflow_run_id": metadata["dataset_mlflow_run_id"],
+            "candidate_model_version": candidate["model_version"],
+            "candidate_model_run_id": candidate["model_run_id"],
+            "champion_model_version": champion["model_version"],
+            "champion_model_run_id": champion["model_run_id"],
+            "primary_metric": args.primary_metric,
+            "min_primary_delta": args.min_primary_delta,
+            "min_recall_delta": args.min_recall_delta,
+            "min_precision_delta": args.min_precision_delta,
+            "cohort_start_time": metadata["cohort_start_time"],
+            "cohort_end_time": metadata["cohort_end_time"],
+            "cutoff_time": metadata["cutoff_time"],
+            "label_maturity_seconds": metadata["label_maturity_seconds"],
+            "decision_selection": metadata["decision_selection"],
+        })
+
+        evaluation_metrics: dict[str, float] = {
+            "dataset_decision_count": float(metadata["decision_count"]),
+            "dataset_labeled_decision_count": float(
+                metadata["labeled_decision_count"]
+            ),
+            "dataset_label_coverage": float(metadata["label_coverage"]),
+            "dataset_fail_count": float(metadata["fail_count"]),
+            "dataset_pass_count": float(metadata["pass_count"]),
+        }
         for name in metric_names():
-            tags[f"candidate_serving_snapshot_candidate_{name}"] = format_metric(candidate_metrics.get(name))
-            tags[f"candidate_serving_snapshot_champion_{name}"] = format_metric(champion_metrics.get(name))
-            tags[f"candidate_serving_snapshot_delta_{name}"] = format_metric(
-                metric_delta(candidate_metrics, champion_metrics, name)
-            )
+            candidate_value = candidate_metrics.get(name)
+            champion_value = champion_metrics.get(name)
+            delta_value = metric_delta(candidate_metrics, champion_metrics, name)
+            if candidate_value is not None:
+                evaluation_metrics[f"candidate_{name}"] = float(candidate_value)
+            if champion_value is not None:
+                evaluation_metrics[f"champion_{name}"] = float(champion_value)
+            if delta_value is not None:
+                evaluation_metrics[f"delta_{name}"] = float(delta_value)
+        mlflow.log_metrics(evaluation_metrics)
+        mlflow.log_dict(summary, "evaluation/evaluation.json")
+        return evaluation_run_id, summary
 
-    for key, value in tags.items():
-        client.set_model_version_tag(model_name, candidate_version, key, value)
+
+def set_candidate_evaluation_pointer(
+        client: MlflowClient,
+        model_name: str,
+        candidate_version: str,
+        evaluation_run_id: str,
+) -> None:
+    client.set_model_version_tag(
+        model_name,
+        candidate_version,
+        LATEST_EVALUATION_RUN_ID_TAG,
+        evaluation_run_id,
+    )
 
 
 def build_eval_summary(
@@ -615,20 +397,30 @@ def build_eval_summary(
         champion: dict[str, Any],
         status: str,
         reasons: list[str],
-        candidate_metrics: dict[str, Any] | None,
-        champion_metrics: dict[str, Any] | None,
+        candidate_metrics: dict[str, Any],
+        champion_metrics: dict[str, Any],
 ) -> dict[str, Any]:
-    metric_names_for_summary = metric_names()
-
+    names = metric_names()
     return {
-        "comparison_type": "serving_prediction_decision_candidate_vs_champion",
-        "cohort_start_time": args.cohort_start_time,
+        "comparison_type": COMPARISON_TYPE,
+        "dataset": {
+            "dataset_id": metadata["dataset_id"],
+            "manifest_hash": metadata["manifest_hash"],
+            "artifact_sha256": metadata["artifact_sha256"],
+            "mlflow_run_id": metadata["dataset_mlflow_run_id"],
+            "artifact_uri": metadata["artifact_uri"],
+        },
+        "cohort_start_time": metadata["cohort_start_time"],
         "cohort_end_time": metadata["cohort_end_time"],
-        "cutoff_time": args.cutoff_time,
-        "label_maturity_seconds": args.label_maturity_seconds,
+        "cutoff_time": metadata["cutoff_time"],
+        "label_maturity_seconds": metadata["label_maturity_seconds"],
         "decision_selection": metadata["decision_selection"],
-        "max_decisions": args.max_decisions,
-        "primary_metric": args.primary_metric,
+        "gate_policy": {
+            "primary_metric": args.primary_metric,
+            "min_primary_delta": args.min_primary_delta,
+            "min_recall_delta": args.min_recall_delta,
+            "min_precision_delta": args.min_precision_delta,
+        },
         "eval_status": status,
         "eval_reasons": reasons,
         "metadata": metadata,
@@ -636,58 +428,19 @@ def build_eval_summary(
             "model_version": candidate["model_version"],
             "model_run_id": candidate["model_run_id"],
             "model_uri": candidate["model_uri"],
-            "metrics": {
-                name: None if candidate_metrics is None else candidate_metrics.get(name)
-                for name in metric_names_for_summary
-            },
+            "metrics": {name: candidate_metrics.get(name) for name in names},
         },
         "champion": {
             "model_version": champion["model_version"],
             "model_run_id": champion["model_run_id"],
             "model_uri": champion["model_uri"],
-            "metrics": {
-                name: None if champion_metrics is None else champion_metrics.get(name)
-                for name in metric_names_for_summary
-            },
+            "metrics": {name: champion_metrics.get(name) for name in names},
         },
         "delta": {
-            name: (
-                None
-                if candidate_metrics is None or champion_metrics is None
-                else metric_delta(candidate_metrics, champion_metrics, name)
-            )
-            for name in metric_names_for_summary
+            name: metric_delta(candidate_metrics, champion_metrics, name)
+            for name in names
         },
     }
-
-
-def record_deployment_request(
-        args: argparse.Namespace,
-        candidate: dict[str, Any],
-        champion: dict[str, Any],
-        eval_summary: dict[str, Any],
-) -> str:
-    row = build_deployment_request_row(
-        model_name=args.model_name,
-        source_alias=candidate["model_alias"],
-        source_version=candidate["model_version"],
-        source_run_id=candidate["model_run_id"],
-        target_alias=args.champion_alias,
-        previous_version=champion["model_version"],
-        previous_run_id=champion["model_run_id"],
-        eval_type="serving_snapshot",
-        eval_status="passed",
-        approval_status=args.deployment_approval_status,
-        rollout_status="not_started",
-        runtime_target="release",
-        eval_summary=eval_summary,
-        notes=args.deployment_notes,
-        requested_by=args.deployment_requested_by,
-        approved_by=args.deployment_approved_by,
-    )
-
-    insert_deployment_request(row)
-    return str(row["request_id"])
 
 
 def print_result(
@@ -698,84 +451,68 @@ def print_result(
         champion: dict[str, Any],
         status: str,
         reasons: list[str],
-        candidate_metrics: dict[str, Any] | None = None,
-        champion_metrics: dict[str, Any] | None = None,
-        deployment_request_id: str | None = None,
+        candidate_metrics: dict[str, Any],
+        champion_metrics: dict[str, Any],
+        evaluation_run_id: str,
 ) -> None:
-    print("serving_prediction_decision_candidate_vs_champion_comparison")
+    print("serving_gate_dataset_candidate_vs_champion_comparison")
     print(f"tracking_uri={tracking_uri}")
     print(f"model_name={args.model_name}")
-    print(f"cohort_start_time={args.cohort_start_time}")
+    print(f"dataset_id={metadata['dataset_id']}")
+    print(f"manifest_hash={metadata['manifest_hash']}")
+    print(f"artifact_sha256={metadata['artifact_sha256']}")
+    print(f"cohort_start_time={metadata['cohort_start_time']}")
     print(f"cohort_end_time={metadata['cohort_end_time']}")
-    print(f"cutoff_time={args.cutoff_time}")
-    print(f"label_maturity_seconds={args.label_maturity_seconds}")
+    print(f"cutoff_time={metadata['cutoff_time']}")
+    print(f"label_maturity_seconds={metadata['label_maturity_seconds']}")
     print(f"decision_selection={metadata['decision_selection']}")
-    print(f"max_decisions={metadata['max_decisions']}")
     print(f"n_decisions={metadata['decision_count']}")
     print(f"n_labeled_decisions={metadata['labeled_decision_count']}")
     print(f"n_unlabeled_decisions={metadata['unlabeled_decision_count']}")
     print(f"label_coverage={metadata['label_coverage']:.6f}")
     print(f"n_fail_samples={metadata['fail_count']}")
     print(f"n_pass_samples={metadata['pass_count']}")
-    print(f"first_sample_id={metadata['first_sample_id']}")
-    print(f"last_sample_id={metadata['last_sample_id']}")
+    print(f"source_model_run_ids={metadata['source_model_run_ids']}")
+    print(f"source_thresholds={metadata['source_thresholds']}")
     print(
-        f"candidate version={candidate['model_version']} alias={candidate['model_alias']} run_id={candidate['model_run_id']}")
+        f"candidate version={candidate['model_version']} alias={candidate['model_alias']} "
+        f"run_id={candidate['model_run_id']}"
+    )
     print(
-        f"champion version={champion['model_version']} alias={champion['model_alias']} run_id={champion['model_run_id']}")
-
-    if candidate_metrics is not None and champion_metrics is not None:
-        for name in metric_names():
-            print(
-                f"metric={name} "
-                f"candidate={format_metric(candidate_metrics.get(name))} "
-                f"champion={format_metric(champion_metrics.get(name))} "
-                f"delta={format_metric(metric_delta(candidate_metrics, champion_metrics, name))}"
-            )
-
+        f"champion version={champion['model_version']} alias={champion['model_alias']} "
+        f"run_id={champion['model_run_id']}"
+    )
+    for name in metric_names():
+        print(
+            f"metric={name} "
+            f"candidate={format_metric(candidate_metrics.get(name))} "
+            f"champion={format_metric(champion_metrics.get(name))} "
+            f"delta={format_metric(metric_delta(candidate_metrics, champion_metrics, name))}"
+        )
     print(f"candidate_serving_snapshot_eval_status={status}")
     for reason in reasons:
         print(f"candidate_serving_snapshot_eval_reason={reason}")
-
-    if deployment_request_id is not None:
-        print(f"deployment_request_id={deployment_request_id}")
-
-    if status == "passed":
-        print(
-            "promote_command="
-            f"python scripts/deployment/promote_model_alias.py "
-            f"--source-alias {args.candidate_alias} "
-            f"--target-alias {args.champion_alias}"
-        )
+    # Keep the evaluation run ID as the final stdout line for Airflow XCom.
+    print(f"evaluation_run_id={evaluation_run_id}")
 
 
 def main() -> None:
     args = parse_args()
-    validate_args(args)
-
     tracking_uri = resolve_tracking_uri(args.tracking_uri)
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
 
-    candidate = resolve_model(client, args.model_name, args.candidate_alias, args.candidate_version)
-    champion = resolve_model(client, args.model_name, args.champion_alias, args.champion_version)
-
-    features, y_true, _, metadata = load_labeled_serving_decisions(
-        args,
-        champion_model_run_id=champion["model_run_id"],
+    candidate = resolve_model(
+        client, args.model_name, args.candidate_alias, args.candidate_version
     )
-    reasons = insufficient_data_reasons(metadata, args)
-
-    if reasons:
-        status = "insufficient_data"
-        if args.set_tags:
-            set_candidate_tags(client, args.model_name, candidate["model_version"], status, reasons, args, metadata)
-        print_result(tracking_uri, args, metadata, candidate, champion, status, reasons)
-        if args.record_deployment_request:
-            print("deployment_request_skipped reason=insufficient_data")
-        if args.fail_on_gate_failure:
-            raise SystemExit(1)
-        return
+    champion = resolve_model(
+        client, args.model_name, args.champion_alias, args.champion_version
+    )
+    validate_distinct_models(candidate, champion)
+    features, y_true, _, metadata = load_labeled_serving_decisions(
+        args.dataset_id,
+        tracking_uri=tracking_uri,
+    )
 
     candidate_metrics = evaluate_predictions(y_true, predict_model(candidate, features))
     champion_metrics = evaluate_predictions(y_true, predict_model(champion, features))
@@ -788,41 +525,24 @@ def main() -> None:
         args.min_precision_delta,
     )
 
-    if args.set_tags:
-        set_candidate_tags(
-            client,
-            args.model_name,
-            candidate["model_version"],
-            status,
-            reasons,
-            args,
-            metadata,
-            candidate_metrics,
-            champion_metrics,
-        )
-
-    eval_summary = build_eval_summary(
+    evaluation_run_id, _ = log_evaluation_run(
+        experiment_name=args.evaluation_experiment_name,
+        status=status,
+        reasons=reasons,
         args=args,
         metadata=metadata,
         candidate=candidate,
         champion=champion,
-        status=status,
-        reasons=reasons,
         candidate_metrics=candidate_metrics,
         champion_metrics=champion_metrics,
     )
-
-    deployment_request_id = None
-    if args.record_deployment_request:
-        if status == "passed":
-            deployment_request_id = record_deployment_request(
-                args=args,
-                candidate=candidate,
-                champion=champion,
-                eval_summary=eval_summary,
-            )
-        else:
-            print("deployment_request_skipped reason=gate_failed")
+    if args.set_tags:
+        set_candidate_evaluation_pointer(
+            client,
+            args.model_name,
+            candidate["model_version"],
+            evaluation_run_id,
+        )
 
     print_result(
         tracking_uri,
@@ -834,9 +554,8 @@ def main() -> None:
         reasons,
         candidate_metrics,
         champion_metrics,
-        deployment_request_id,
+        evaluation_run_id,
     )
-
     if args.fail_on_gate_failure and status == "failed":
         raise SystemExit(1)
 

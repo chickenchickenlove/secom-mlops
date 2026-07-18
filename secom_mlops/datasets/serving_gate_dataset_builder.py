@@ -1,4 +1,4 @@
-"""Orchestrate immutable training-source dataset persistence."""
+"""Materialize an immutable serving-gate dataset before model evaluation."""
 
 from __future__ import annotations
 
@@ -15,49 +15,79 @@ from secom_mlops.datasets.dataset_artifacts import (
     MLFLOW_DATASET_DIGEST_LENGTH,
     write_artifacts,
 )
-from secom_mlops.datasets.training_dataset import (
+from secom_mlops.datasets.serving_gate_dataset import (
     DATASET_SCHEMA_VERSION,
     DATASET_TYPE,
     SELECTOR_VERSION,
-    DatasetBuildConfig,
-    DatasetIdentity,
+    ServingGateDatasetConfig,
+    ServingGateDatasetIdentity,
     build_dataset_frame,
     build_dataset_identity,
     build_manifest,
     evaluate_readiness,
 )
-from secom_mlops.datasets.training_dataset_repository import (
+from secom_mlops.datasets.serving_gate_dataset_repository import (
     claim_dataset_build,
     fetch_members,
+    find_ready_dataset_by_manifest,
+    get_ready_dataset_by_manifest,
     mark_dataset_failed,
     mark_dataset_ready,
-    ready_dataset_exists,
 )
 from secom_mlops.monitor.db import connect
 
-DEFAULT_EXPERIMENT_NAME = "secom-training-datasets"
-MLFLOW_DATASET_CONTEXT = "training_source"
+DEFAULT_EXPERIMENT_NAME = "secom-serving-gate-datasets"
+MLFLOW_DATASET_CONTEXT = "serving_gate"
 
 
 @dataclass(frozen=True)
-class PersistedDataset:
+class PersistedServingGateDataset:
     dataset_id: str
     manifest_hash: str
     artifact_sha256: str
     mlflow_run_id: str
     artifact_uri: str
     stats: dict[str, Any]
+    reused: bool = False
 
 
-class DatasetBuildSkipped(RuntimeError):
-    """The scheduled check completed without requiring a new dataset."""
+class InsufficientServingGateData(RuntimeError):
+    """The requested cohort does not satisfy the materialization contract."""
+
+
+def _persisted_from_catalog(
+        row: dict[str, Any],
+        *,
+        reused: bool,
+) -> PersistedServingGateDataset:
+    required_fields = ("artifact_sha256", "mlflow_run_id", "artifact_uri")
+    if missing := [name for name in required_fields if not row.get(name)]:
+        raise RuntimeError(
+            "READY dataset catalog row is incomplete: "
+            f"dataset_id={row.get('dataset_id')} fields={missing}"
+        )
+    return PersistedServingGateDataset(
+        dataset_id=str(row["dataset_id"]),
+        manifest_hash=str(row["manifest_hash"]),
+        artifact_sha256=str(row["artifact_sha256"]),
+        mlflow_run_id=str(row["mlflow_run_id"]),
+        artifact_uri=str(row["artifact_uri"]),
+        stats={
+            "decision_count": int(row["eligible_sample_count"]),
+            "labeled_decision_count": int(row["labeled_sample_count"]),
+            "unlabeled_decision_count": int(row["unlabeled_sample_count"]),
+            "label_coverage": float(row["label_coverage"]),
+            "fail_count": int(row["fail_count"]),
+            "pass_count": int(row["pass_count"]),
+        },
+        reused=reused,
+    )
 
 
 def build_mlflow_dataset(
         frame: pd.DataFrame,
-        identity: DatasetIdentity,
+        identity: ServingGateDatasetIdentity,
 ) -> Any:
-    """Build MLflow Dataset metadata without copying the persisted artifact."""
     import mlflow
 
     manifest_digest = identity.manifest_hash.removeprefix("sha256:v1:")
@@ -72,8 +102,8 @@ def build_mlflow_dataset(
 def persist_artifacts_to_mlflow(
         artifact_dir: Path,
         frame: pd.DataFrame,
-        identity: DatasetIdentity,
-        config: DatasetBuildConfig,
+        identity: ServingGateDatasetIdentity,
+        config: ServingGateDatasetConfig,
         stats: dict[str, Any],
         artifact_sha256: str,
         *,
@@ -84,10 +114,11 @@ def persist_artifacts_to_mlflow(
 
     mlflow.set_tracking_uri(tracking_uri)
     experiment = mlflow.get_experiment_by_name(experiment_name)
-    if experiment is None:
-        experiment_id = mlflow.create_experiment(experiment_name)
-    else:
-        experiment_id = experiment.experiment_id
+    experiment_id = (
+        mlflow.create_experiment(experiment_name)
+        if experiment is None
+        else experiment.experiment_id
+    )
 
     with mlflow.start_run(
             experiment_id=experiment_id,
@@ -98,25 +129,26 @@ def persist_artifacts_to_mlflow(
                 "dataset_schema_version": DATASET_SCHEMA_VERSION,
                 "selector_version": SELECTOR_VERSION,
                 "manifest_hash": identity.manifest_hash,
-                "decision_time_column": "snapshot_available_at",
+                "decision_time_column": "predicted_at",
+                "runtime_slot": "release",
             },
     ) as run:
         mlflow.log_params({
             "cohort_start_time": config.cohort_start_time,
-            "cutoff_time": config.cutoff_time,
             "cohort_end_time": config.cohort_end_time,
+            "cutoff_time": config.cutoff_time,
             "label_maturity_seconds": config.label_maturity_seconds,
-            "min_labeled_samples": config.min_labeled_samples,
+            "min_decisions": config.min_decisions,
+            "min_labeled_decisions": config.min_labeled_decisions,
             "min_label_coverage": config.min_label_coverage,
             "min_fail_samples": config.min_fail_samples,
             "min_pass_samples": config.min_pass_samples,
-            "simulation_run_id": config.simulation_run_id or "",
-            "drift_segment": config.drift_segment or "",
         })
         mlflow.log_metrics({
-            "eligible_sample_count": float(stats["eligible_sample_count"]),
-            "labeled_sample_count": float(stats["labeled_sample_count"]),
-            "unlabeled_sample_count": float(stats["unlabeled_sample_count"]),
+            "decision_count": float(stats["decision_count"]),
+            "labeled_decision_count": float(stats["labeled_decision_count"]),
+            "unlabeled_decision_count": float(stats["unlabeled_decision_count"]),
+            "unique_sample_count": float(stats["unique_sample_count"]),
             "label_coverage": float(stats["label_coverage"]),
             "fail_count": float(stats["fail_count"]),
             "pass_count": float(stats["pass_count"]),
@@ -137,12 +169,12 @@ def persist_artifacts_to_mlflow(
         return run.info.run_id, artifact_uri
 
 
-def build_training_dataset(
-        config: DatasetBuildConfig,
+def build_serving_gate_dataset(
+        config: ServingGateDatasetConfig,
         *,
         tracking_uri: str,
         experiment_name: str = DEFAULT_EXPERIMENT_NAME,
-) -> PersistedDataset:
+) -> PersistedServingGateDataset:
     config.validate()
 
     with connect() as conn:
@@ -153,26 +185,29 @@ def build_training_dataset(
             metadata_members = fetch_members(cursor, config, include_features=False)
             readiness = evaluate_readiness(config, metadata_members)
             if not readiness.ready:
-                raise DatasetBuildSkipped("; ".join(readiness.reasons))
+                raise InsufficientServingGateData("; ".join(readiness.reasons))
 
             identity = build_dataset_identity(config, metadata_members)
-            if ready_dataset_exists(cursor, identity.manifest_hash):
-                raise DatasetBuildSkipped(
-                    "dataset membership is already READY: "
-                    f"dataset_id={identity.dataset_id}"
-                )
+            existing = find_ready_dataset_by_manifest(cursor, identity.manifest_hash)
+            if existing is not None:
+                return _persisted_from_catalog(existing, reused=True)
 
             full_members = fetch_members(cursor, config, include_features=True)
             metadata_identity = [member.identity_record() for member in metadata_members]
             full_identity = [member.identity_record() for member in full_members]
             if metadata_identity != full_identity:
-                raise RuntimeError("dataset membership changed within repeatable-read build")
+                raise RuntimeError(
+                    "serving-gate dataset membership changed within repeatable-read build"
+                )
 
     if not claim_dataset_build(identity, config, readiness.stats):
-        raise DatasetBuildSkipped(
-            "dataset membership became READY concurrently: "
-            f"dataset_id={identity.dataset_id}"
-        )
+        existing = get_ready_dataset_by_manifest(identity.manifest_hash)
+        if existing is None:
+            raise RuntimeError(
+                "serving-gate dataset claim failed without a READY catalog row: "
+                f"dataset_id={identity.dataset_id}"
+            )
+        return _persisted_from_catalog(existing, reused=True)
 
     try:
         frame = build_dataset_frame(identity.dataset_id, full_members)
@@ -202,7 +237,7 @@ def build_training_dataset(
             artifact_uri=artifact_uri,
             artifact_sha256=artifact_sha256,
         )
-        return PersistedDataset(
+        return PersistedServingGateDataset(
             dataset_id=identity.dataset_id,
             manifest_hash=identity.manifest_hash,
             artifact_sha256=artifact_sha256,
@@ -215,7 +250,7 @@ def build_training_dataset(
             mark_dataset_failed(identity.dataset_id, str(exc))
         except Exception as catalog_exc:
             print(
-                "failed to record dataset build failure: "
+                "failed to record serving-gate dataset build failure: "
                 f"dataset_id={identity.dataset_id} error={catalog_exc}",
                 file=sys.stderr,
             )

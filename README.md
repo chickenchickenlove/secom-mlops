@@ -13,7 +13,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 - Airflow DAG가 candidate 학습, gate 평가, canary 배포, traffic split, release promotion, rollback을 제어합니다.
 - `build_periodic_training_dataset` DAG는 5분마다 point-in-time readiness를 확인하고, maturity만큼 이동한 Airflow data interval의 versioned training-source dataset을 영속화합니다.
 - Candidate 학습은 `serving_feature_snapshots`에서 `available_at` 기준 first-complete snapshot을 선택하고, `label_events` correction history를 cutoff 기준으로 결합합니다.
-- Candidate Gate는 현재 champion의 prediction decision을 `predicted_at` 기준으로 선택하고, exact serving snapshot/hash와 `cutoff_time`까지 도착한 최신 label revision을 검증합니다.
+- Candidate Gate는 release prediction decision으로 평가 Dataset을 먼저 영속화하고, 그 dataset을 다시 불러와 Candidate와 Champion을 비교합니다.
 - Grafana는 PostgreSQL metric table과 Prometheus Kafka metric을 함께 시각화합니다.
 - Grafana에서 오프라인 학습 데이터와 serving gate를 위한 데이터셋 구축에 필요한 Label Maturity를 10분 단위로 확인할 수 있습니다.
 
@@ -26,7 +26,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 - 모델이 원본 1,567개 샘플 전체를 모두 학습하는 상황을 줄이기 위해 Champion과 Candidate의 개발 원본을 최대 1,000건으로 제한합니다.
   - Champion은 원본 SECOM 데이터의 첫 1,000건을 사용합니다.
   - Candidate는 최신 eligible serving snapshot을 최대 1,000건 사용합니다.
-  - Serving Gate는 최신 Champion prediction decision을 최대 1,000건 사용합니다.
+- Serving Gate Dataset에는 별도 상한을 두지 않고 지정한 시간 cohort의 전체 release decision을 저장합니다.
 - 이 제한만으로 학습과 Gate에서 사용되는 원본 SECOM 샘플이 완전히 분리되지는 않습니다. 이는 현재 반복 시뮬레이션 구조의 한계입니다.
 
 ## 기술 스택
@@ -193,22 +193,30 @@ Main Airflow DAG의 기본 `min_samples=1000`이므로, 기본 실행에서는 1
 | 선택 대상 | Hyperparameter와 threshold | Hyperparameter와 threshold |
 | 최종 등록 모델 | 선택된 hyperparameter로 전체 labeled 개발 원본 refit | 선택된 hyperparameter로 1,000건 전체 refit |
 
-기본 Candidate 실행에서는 800건의 선택 학습 원본과 200건의 validation 원본을 사용한 뒤 1,000건 전체로 최종 모델을 refit합니다. Candidate와 Champion은 동일한 원본 데이터를 사용하는 것이 아니라, 동일한 개발 원본 크기와 모델 선택 절차를 사용합니다. 최종 승격 평가는 별도의 Champion prediction decision cohort를 사용하는 Serving Gate가 담당합니다.
+기본 Candidate 실행에서는 800건의 선택 학습 원본과 200건의 validation 원본을 사용한 뒤 1,000건 전체로 최종 모델을 refit합니다.
+최초로 만들어진 Champion은 원본 SECOM의 첫 1,000건으로 학습합니다.
+이후 생성되는 Champion은 Serving Gate를 통과해 승격된 이전 Candidate이므로, 각 Champion의 학습 Dataset은 해당 모델의 학습 시점에 따라 달라집니다.
+현재 Candidate와 Champion은 학습 Dataset이 아니라 동일한 Serving Gate Dataset에서 평가됩니다.
 
 ### Serving Gate 평가 cohort
 
-Serving Gate는 `candidate`와 `champion`을 실제 Champion prediction decision
-기반의 동일한 Feature cohort에서 비교합니다.
+Serving Gate는 release decision cohort를 구성해 Dataset으로 먼저 영속화한 뒤, 동일한 Dataset을 이용해 candidate/champion 모델 성능을 비교합니다.
 
-1. MLflow `champion` alias가 가리키는 `model_run_id`를 확인합니다.
-2. 동일한 `(model_run_id, threshold, sample_id, serving_snapshot_id, snapshot_version)`의 반복 prediction 중 최초 decision만 남깁니다.
-3. `S <= predicted_at < T-L`인 decision 중 최신 최대 1,000건을 선택합니다.
-4. `available_at <= T`인 label 중 sample별 최대 `label_revision`을 `LEFT JOIN`하여 실제 `label_coverage`를 계산합니다.
-5. Snapshot identity와 `feature_hash`가 일치하는 complete snapshot을 복원합니다.
-6. Candidate와 Champion을 복원된 동일 Feature vector에서 평가합니다.
+1. `runtime_slot='release'`인 prediction만 대상으로 합니다.
+2. 동일한 `(sample_id, snapshot_version)`의 반복 요청·재시도 중 `predicted_at`, `prediction_id` 순으로 최초 Decision만 남깁니다.
+3. `S <= predicted_at < T-L` 기준으로 중복을 제거한 Decision 전체를 선택합니다. Dataset row 수 상한은 없습니다.
+4. `available_at <= T`인 label 중 sample별 최대 `label_revision`을 `LEFT JOIN`합니다.
+5. Decision 및 labeled Decision이 각각 1,000건 이상이고 label coverage 0.95 이상, fail/pass가 각각 20건 이상일 때만 Dataset을 만듭니다. 데이터 부족은 영속화하지 않고 Gate task를 실패시킵니다.
+6. Exact snapshot identity와 `feature_hash`가 일치하는 complete Feature를 Parquet으로 저장하고 MLflow `secom-serving-gate-datasets` experiment와 PostgreSQL `dataset_builds`에 READY 상태를 기록합니다.
+7. 다음 Airflow Task에는 내부 XCom으로 `dataset_id`만 전달합니다. 평가 Task는 READY catalog, manifest hash, artifact SHA-256과 Parquet schema를 검증한 뒤 labeled Decision 전체를 읽습니다.
+8. 평가를 시작할 때 candidate와 champion의 모델 버전을 각각 확인한 후, 동일한 Dataset에 대해 두 모델의 예측 성능을 비교합니다. 두 모델의 run ID가 같으면 Gate를 실패시킵니다. Dataset 생성 구간에 release였던 여러 source model run과 threshold는 row lineage로만 보존합니다.
+9. 평가 결과는 MLflow `secom-serving-gate-evaluations` experiment에 별도 evaluation run으로 기록합니다. 이 run에는 사용한 Dataset, candidate/champion의 정확한 model version과 run ID, Gate 기준 및 metric이 포함됩니다.
 
-Snapshot 누락, conflicting hash, prediction/snapshot hash 불일치, incomplete snapshot 및 Feature count 불일치는 Gate 오류로 처리합니다. Gate 실패나 데이터 부족은 Airflow task 실패로 연결됩니다.
-현재 Gate는 Champion `model_run_id`를 기준으로 decision을 선택하지만 `runtime_slot='release'`와 실제 release threshold를 아직 강제하지 않습니다. 따라서 서로 다른 runtime slot이나 threshold의 prediction이 같은 cohort에 포함될 가능성이 있으며, 이 계약 강화는 후속 작업입니다.
+Snapshot 누락, snapshot identity/hash 불일치, incomplete snapshot, Feature count 불일치 및 artifact 검증 실패는 Gate 오류로 처리합니다. Metric Gate 실패와 데이터 부족도 Airflow task 실패로 연결됩니다.
+평가에 적용할 threshold를 운영 중 별도로 변경하는 정책은 현재 범위가 아니며, Dataset에는 당시 release Decision의 `source_threshold`를 보존합니다.
+Serving Gate Dataset builder의 지원되는 실행 경로는 Airflow DAG뿐이며, DAG는 `max_active_runs=1`로 실행을 직렬화합니다.
+동일한 데이터로 구성된 READY Dataset이 이미 있으면 기존 `dataset_id`를 재사용합니다.
+배포 요청은 candidate가 가리키는 최신 `evaluation_run_id`만 사용할 수 있으며, `eval_type=serving_gate_evaluation`으로 기록됩니다. 다른 평가 유형의 요청은 Canary 배포와 Champion 승격에 사용할 수 없습니다. 요청 시점의 candidate가 평가 대상과 다르거나 현재 champion이 평가 당시 champion에서 변경됐다면 재평가가 필요하므로 요청을 거부합니다.
 
 주요 DAG:
 

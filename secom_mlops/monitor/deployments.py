@@ -8,6 +8,7 @@ from psycopg.types.json import Jsonb
 from secom_mlops.monitor.db import connect
 
 VALID_EVAL_STATUSES = {"passed", "failed", "insufficient_data", "skipped", "unknown"}
+SERVING_GATE_EVAL_TYPE = "serving_gate_evaluation"
 VALID_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
 VALID_ROLLOUT_STATUSES = {
     "not_started",
@@ -110,6 +111,7 @@ FROM model_deployment_requests
 WHERE model_name = %s
   AND source_version = %s
   AND target_alias = %s
+  AND eval_type = %s
   AND eval_status = 'passed'
   AND approval_status = 'approved'
   AND rollout_status NOT IN ('deployed', 'failed', 'rolled_back', 'superseded')
@@ -132,6 +134,7 @@ SELECT *
 FROM model_deployment_requests
 WHERE model_name = %s
   AND target_alias = %s
+  AND eval_type = %s
   AND eval_status = 'passed'
   AND approval_status = 'approved'
   AND rollout_status IN ('not_started', 'promoted', 'canary_reloading', 'canary_ready')
@@ -144,6 +147,7 @@ SELECT *
 FROM model_deployment_requests
 WHERE model_name = %s
   AND target_alias = %s
+  AND eval_type = %s
   AND eval_status = 'passed'
   AND approval_status = 'approved'
   AND rollout_status IN ('canary_ready', 'release_reloading')
@@ -354,20 +358,13 @@ RETURNING *;
 """
 
 
-def resolve_eval_status(eval_status: str | None = None, gate_status: str | None = None) -> str:
-    return eval_status or gate_status or "unknown"
-
-
 def validate_deployment_statuses(
         *,
-        eval_status: str | None = None,
-        gate_status: str | None = None,
+        eval_status: str,
         approval_status: str,
         rollout_status: str = "not_started",
 ) -> None:
-    resolved_eval_status = resolve_eval_status(eval_status, gate_status)
-
-    if resolved_eval_status not in VALID_EVAL_STATUSES:
+    if eval_status not in VALID_EVAL_STATUSES:
         raise ValueError(f"eval_status must be one of {sorted(VALID_EVAL_STATUSES)}")
 
     if approval_status not in VALID_APPROVAL_STATUSES:
@@ -375,6 +372,16 @@ def validate_deployment_statuses(
 
     if rollout_status not in VALID_ROLLOUT_STATUSES:
         raise ValueError(f"rollout_status must be one of {sorted(VALID_ROLLOUT_STATUSES)}")
+
+
+def validate_serving_gate_eval_type(request: dict[str, Any]) -> None:
+    if request.get("eval_type") != SERVING_GATE_EVAL_TYPE:
+        raise RuntimeError(
+            "deployment request is not based on a serving-gate evaluation: "
+            f"request_id={request.get('request_id')} "
+            f"eval_type={request.get('eval_type')} "
+            f"required_eval_type={SERVING_GATE_EVAL_TYPE}"
+        )
 
 
 def build_deployment_request_row(
@@ -387,8 +394,7 @@ def build_deployment_request_row(
         previous_version: str | None,
         previous_run_id: str | None,
         approval_status: str,
-        eval_status: str | None = None,
-        gate_status: str | None = None,
+        eval_status: str = "unknown",
         rollout_status: str = "not_started",
         runtime_target: str = "release",
         eval_type: str = "unknown",
@@ -400,10 +406,8 @@ def build_deployment_request_row(
         request_id: str | None = None,
         now: float | None = None,
 ) -> dict[str, Any]:
-    resolved_eval_status = resolve_eval_status(eval_status, gate_status)
-
     validate_deployment_statuses(
-        eval_status=resolved_eval_status,
+        eval_status=eval_status,
         approval_status=approval_status,
         rollout_status=rollout_status,
     )
@@ -423,7 +427,7 @@ def build_deployment_request_row(
         "previous_version": None if previous_version is None else str(previous_version),
         "previous_run_id": previous_run_id,
         "eval_type": eval_type,
-        "eval_status": resolved_eval_status,
+        "eval_status": eval_status,
         "eval_summary_json": Jsonb(summary),
         "approval_status": approval_status,
         "rollout_status": rollout_status,
@@ -470,7 +474,12 @@ def find_approved_deployment_request(
         with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 APPROVED_DEPLOYMENT_REQUEST_SQL,
-                [model_name, str(source_version), target_alias],
+                [
+                    model_name,
+                    str(source_version),
+                    target_alias,
+                    SERVING_GATE_EVAL_TYPE,
+                ],
             )
             row = cursor.fetchone()
 
@@ -486,7 +495,7 @@ def find_next_approved_deployment_request(
         with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 NEXT_APPROVED_DEPLOYMENT_REQUEST_SQL,
-                [model_name, target_alias],
+                [model_name, target_alias, SERVING_GATE_EVAL_TYPE],
             )
             row = cursor.fetchone()
 
@@ -502,7 +511,7 @@ def find_next_release_promotable_deployment_request(
         with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 NEXT_RELEASE_PROMOTABLE_DEPLOYMENT_REQUEST_SQL,
-                [model_name, target_alias],
+                [model_name, target_alias, SERVING_GATE_EVAL_TYPE],
             )
             row = cursor.fetchone()
 

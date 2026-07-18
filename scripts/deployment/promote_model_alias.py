@@ -8,6 +8,7 @@ from secom_mlops.monitor.deployments import (
     find_approved_deployment_request,
     get_deployment_request,
     mark_deployment_request_promoted,
+    validate_serving_gate_eval_type,
 )
 from secom_mlops_common.config.mlflow import (
     DEFAULT_CHAMPION_ALIAS,
@@ -61,6 +62,8 @@ def resolve_source_version(
 
 
 def validate_request(request: dict, source, target_alias: str) -> None:
+    validate_serving_gate_eval_type(request)
+
     if request["eval_status"] != "passed":
         raise RuntimeError(f"deployment request eval_status is not passed: {request['eval_status']}")
 

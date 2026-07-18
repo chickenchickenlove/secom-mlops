@@ -9,8 +9,14 @@ from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 
 from secom_mlops.monitor.deployments import (
+    SERVING_GATE_EVAL_TYPE,
     build_deployment_request_row,
     insert_deployment_request,
+)
+from secom_mlops.monitor.serving_gate_evaluations import (
+    LATEST_EVALUATION_RUN_ID_TAG,
+    ServingGateEvaluationRecord,
+    load_evaluation_run,
 )
 from secom_mlops_common.config.mlflow import (
     DEFAULT_CANDIDATE_ALIAS,
@@ -19,13 +25,10 @@ from secom_mlops_common.config.mlflow import (
     resolve_tracking_uri,
 )
 
-EVAL_TAG_PREFIX = "candidate_serving_snapshot_"
-EVAL_STATUS_TAG = "candidate_serving_snapshot_eval_status"
-EVAL_REASON_TAG = "candidate_serving_snapshot_eval_reason"
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--evaluation-run-id", required=True)
     parser.add_argument("--tracking-uri", default=None)
     parser.add_argument("--model-name", default=resolve_model_name())
     parser.add_argument("--candidate-alias", default=DEFAULT_CANDIDATE_ALIAS)
@@ -42,30 +45,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_candidate(
-        client: MlflowClient,
-        model_name: str,
-        candidate_alias: str,
-        candidate_version: str | None,
-) -> dict[str, Any]:
-    if candidate_version is not None:
-        version = client.get_model_version(model_name, normalize_model_version(candidate_version))
-        source_alias = resolve_source_alias_if_matching(
-            client=client,
-            model_name=model_name,
-            candidate_alias=candidate_alias,
-            version=str(version.version),
-        )
-    else:
-        version = client.get_model_version_by_alias(model_name, candidate_alias)
-        source_alias = candidate_alias
-
-    return {
-        "source_alias": source_alias,
-        "version": str(version.version),
-        "run_id": str(version.run_id),
-        "tags": dict(version.tags),
-    }
+def normalize_model_version(value: str) -> str:
+    normalized = value.strip()
+    if normalized.lower().startswith("v") and normalized[1:].isdigit():
+        return normalized[1:]
+    return normalized
 
 
 def resolve_source_alias_if_matching(
@@ -79,94 +63,128 @@ def resolve_source_alias_if_matching(
         alias_version = client.get_model_version_by_alias(model_name, candidate_alias)
     except MlflowException:
         return None
-
-    if str(alias_version.version) == str(version):
-        return candidate_alias
-
-    return None
+    return candidate_alias if str(alias_version.version) == str(version) else None
 
 
-def normalize_model_version(value: str) -> str:
-    normalized = value.strip()
-    if normalized.lower().startswith("v") and normalized[1:].isdigit():
-        return normalized[1:]
-    return normalized
+def resolve_candidate(
+        client: MlflowClient,
+        model_name: str,
+        candidate_alias: str,
+        candidate_version: str | None,
+) -> dict[str, Any]:
+    if candidate_version is not None:
+        version = client.get_model_version(
+            model_name,
+            normalize_model_version(candidate_version),
+        )
+        source_alias = resolve_source_alias_if_matching(
+            client=client,
+            model_name=model_name,
+            candidate_alias=candidate_alias,
+            version=str(version.version),
+        )
+    else:
+        version = client.get_model_version_by_alias(model_name, candidate_alias)
+        source_alias = candidate_alias
+    tags = dict(getattr(version, "tags", {}) or {})
+    return {
+        "source_alias": source_alias,
+        "version": str(version.version),
+        "run_id": str(version.run_id),
+        "latest_evaluation_run_id": tags.get(LATEST_EVALUATION_RUN_ID_TAG),
+    }
 
 
-def resolve_champion(
+def resolve_current_champion(
         client: MlflowClient,
         model_name: str,
         champion_alias: str,
-) -> dict[str, Any]:
-    try:
-        version = client.get_model_version_by_alias(model_name, champion_alias)
-    except MlflowException:
-        return {
-            "version": None,
-            "run_id": None,
-        }
-
+) -> dict[str, str]:
+    version = client.get_model_version_by_alias(model_name, champion_alias)
     return {
         "version": str(version.version),
         "run_id": str(version.run_id),
     }
 
 
-def validate_candidate_eval(candidate: dict[str, Any]) -> None:
-    status = candidate["tags"].get(EVAL_STATUS_TAG)
-    if status != "passed":
+def validate_evaluation_for_deployment(
+        evaluation: ServingGateEvaluationRecord,
+        *,
+        model_name: str,
+        candidate: dict[str, Any],
+        current_champion: dict[str, str],
+) -> None:
+    if evaluation.evaluation_status != "passed":
         raise RuntimeError(
-            "candidate serving snapshot eval is not passed: "
-            f"candidate_version={candidate['version']} "
-            f"status={status} "
-            f"reason={candidate['tags'].get(EVAL_REASON_TAG)}"
+            "serving-gate evaluation did not pass: "
+            f"evaluation_run_id={evaluation.evaluation_run_id} "
+            f"status={evaluation.evaluation_status}"
+        )
+    evaluated_candidate = (
+        evaluation.model_name,
+        evaluation.candidate_model_version,
+        evaluation.candidate_model_run_id,
+    )
+    requested_candidate = (
+        model_name,
+        candidate["version"],
+        candidate["run_id"],
+    )
+    if evaluated_candidate != requested_candidate:
+        raise RuntimeError(
+            "candidate does not match serving-gate evaluation: "
+            f"evaluation_run_id={evaluation.evaluation_run_id} "
+            f"evaluated={evaluated_candidate} "
+            f"requested={requested_candidate}"
         )
 
+    # For the corner case
+    latest_evaluation_run_id = candidate.get("latest_evaluation_run_id")
+    if evaluation.evaluation_run_id != latest_evaluation_run_id:
+        raise RuntimeError(
+            "serving-gate evaluation is not the Candidate's latest published evaluation: "
+            f"requested_evaluation_run_id={evaluation.evaluation_run_id} "
+            f"latest_evaluation_run_id={latest_evaluation_run_id}"
+        )
 
-def build_eval_summary(candidate: dict[str, Any], champion: dict[str, Any]) -> dict[str, Any]:
-    tags = {
-        key: value
-        for key, value in candidate["tags"].items()
-        if key.startswith(EVAL_TAG_PREFIX)
-    }
-
-    return {
-        "comparison_type": "serving_snapshot_candidate_vs_champion",
-        "eval_status": candidate["tags"].get(EVAL_STATUS_TAG),
-        "eval_reason": candidate["tags"].get(EVAL_REASON_TAG),
-        "candidate": {
-            "model_version": candidate["version"],
-            "model_run_id": candidate["run_id"],
-        },
-        "champion": {
-            "model_version": champion["version"],
-            "model_run_id": champion["run_id"],
-        },
-        "tags": tags,
-    }
+    if (
+            evaluation.champion_model_version != current_champion["version"]
+            or evaluation.champion_model_run_id != current_champion["run_id"]
+    ):
+        raise RuntimeError(
+            "champion changed after serving-gate evaluation; reevaluation is required: "
+            f"evaluation_run_id={evaluation.evaluation_run_id} "
+            f"evaluated_version={evaluation.champion_model_version} "
+            f"evaluated_run_id={evaluation.champion_model_run_id} "
+            f"current_version={current_champion['version']} "
+            f"current_run_id={current_champion['run_id']}"
+        )
 
 
 def main() -> None:
     args = parse_args()
     tracking_uri = resolve_tracking_uri(args.tracking_uri)
-
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
 
+    evaluation = load_evaluation_run(client, args.evaluation_run_id)
     candidate = resolve_candidate(
         client=client,
         model_name=args.model_name,
         candidate_alias=args.candidate_alias,
         candidate_version=args.candidate_version,
     )
-    champion = resolve_champion(
+    current_champion = resolve_current_champion(
         client=client,
         model_name=args.model_name,
         champion_alias=args.champion_alias,
     )
-
-    validate_candidate_eval(candidate)
-    eval_summary = build_eval_summary(candidate, champion)
+    validate_evaluation_for_deployment(
+        evaluation,
+        model_name=args.model_name,
+        candidate=candidate,
+        current_champion=current_champion,
+    )
 
     row = build_deployment_request_row(
         request_id=args.request_id,
@@ -175,14 +193,14 @@ def main() -> None:
         source_version=candidate["version"],
         source_run_id=candidate["run_id"],
         target_alias=args.champion_alias,
-        previous_version=champion["version"],
-        previous_run_id=champion["run_id"],
-        eval_type="serving_snapshot",
-        eval_status="passed",
+        previous_version=evaluation.champion_model_version,
+        previous_run_id=evaluation.champion_model_run_id,
+        eval_type=SERVING_GATE_EVAL_TYPE,
+        eval_status=evaluation.evaluation_status, # passed
         approval_status=args.approval_status,
         rollout_status=args.rollout_status,
         runtime_target=args.runtime_target,
-        eval_summary=eval_summary,
+        eval_summary=evaluation.summary,
         notes=args.notes,
         requested_by=args.requested_by,
         approved_by=args.approved_by,
@@ -197,6 +215,7 @@ def main() -> None:
     print(
         f"{action} "
         f"request_id={row['request_id']} "
+        f"evaluation_run_id={evaluation.evaluation_run_id} "
         f"tracking_uri={tracking_uri} "
         f"model_name={row['model_name']} "
         f"source_alias={row['source_alias']} "

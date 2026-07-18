@@ -474,23 +474,17 @@ docker-compose run --rm \
     --min-pass-samples 20
 ```
 
-The required hard gate evaluates candidate and champion on the same cohort of
-actual champion prediction decisions. For direct debugging from `container`,
-run:
+The required hard gate evaluates candidate and champion from a persisted
+serving-gate Dataset. Dataset materialization is supported through Airflow only.
+To debug evaluation of an existing READY Dataset from `container`, run:
 
 ```bash
 docker-compose run --rm \
   -e MONITORING_DATABASE_URL=postgresql://mlops:mlops@postgres:5432/monitoring \
+  -e MLFLOW_TRACKING_URI=http://mlflow:5100 \
   model-trainer \
   python scripts/monitoring/compare_candidate_with_champion_serving.py \
-    --cohort-start-time 1783764800 \
-    --cutoff-time 1783765500 \
-    --label-maturity-seconds 0 \
-    --max-decisions 1000 \
-    --min-decisions 500 \
-    --min-label-coverage 0.95 \
-    --min-fail-samples 20 \
-    --min-pass-samples 20 \
+    --dataset-id serving_gate_0123456789abcdef \
     --set-tags \
     --fail-on-gate-failure
 ```
@@ -502,7 +496,7 @@ docker-compose run --rm \
   -e MONITORING_DATABASE_URL=postgresql://mlops:mlops@postgres:5432/monitoring \
   model-trainer \
   python scripts/deployment/promote_model_alias.py \
-    --source-alias candidate \
+    --request-id <request_id> \
     --target-alias champion \
     --require-approved-request
 ```
@@ -607,7 +601,6 @@ cohort_start_time=...
 cohort_end_time=...
 cutoff_time=...
 label_maturity_seconds=...
-gate_status=pending
 ```
 
 The older default `model-trainer` command still trains from raw SECOM CSV files
@@ -643,8 +636,8 @@ with an independently selected prediction decision cohort:
   "cutoff_time": "2026-07-11T20:00:00+09:00",
   "label_maturity_seconds": 0,
   "candidate_version": null,
-  "max_decisions": 1000,
-  "min_decisions": 500,
+  "min_decisions": 1000,
+  "min_labeled_decisions": 1000,
   "min_label_coverage": 0.95,
   "min_fail_samples": 20,
   "min_pass_samples": 20,
@@ -652,18 +645,26 @@ with an independently selected prediction decision cohort:
 }
 ```
 
-The gate selects the global-first decision for each semantic identity, filters
-the requested time cohort, and then keeps the latest `max_decisions` rows for
-the current Champion model run. It verifies the exact serving snapshot identity
-and Feature hash and uses the highest label revision with
-`available_at <= cutoff_time`.
+The materialization task selects `runtime_slot='release'` decisions and keeps
+the global-first decision for each `(sample_id, snapshot_version)`. It stores
+all deduplicated release decisions in the requested `[cohort_start_time,
+cutoff_time - label_maturity_seconds)` interval without a row cap. It verifies
+the exact serving snapshot identity and Feature hash and uses the highest label
+revision with `available_at <= cutoff_time`.
 
-Candidate and Champion are replayed on the same labeled Feature vectors. The
-Airflow task succeeds only when the Gate status is `passed`; `failed`,
-`insufficient_data`, and integrity errors fail the task.
+The Dataset is persisted to MLflow and `dataset_builds` before evaluation. The
+downstream task receives only `dataset_id`, downloads and verifies the artifact,
+and replays one pinned Candidate and one pinned Champion version on every
+labeled Feature vector. The Airflow task succeeds only when the Gate status is
+`passed`; insufficient data, metric failure, and integrity errors fail the task.
 
-The current Gate filters the Champion `model_run_id` but does not yet enforce
-`runtime_slot='release'` or the actual release threshold.
+Every completed comparison creates a separate MLflow run in
+`secom-serving-gate-evaluations`. The run binds the exact Dataset, Candidate,
+Champion, Gate policy, metrics, and final status. The evaluator prints
+`evaluation_run_id=...` as its final output.
+
+Source model run IDs and source thresholds are retained as Dataset lineage; they
+do not select the independently resolved comparison Champion.
 
 If the gate fails, run `cleanup_failed_candidate_alias`. If the gate passes,
 create or approve the deployment request before canary/release deployment.
@@ -696,8 +697,7 @@ does not re-evaluate candidate and champion on the same offline dataset.
 
 ```bash
 docker-compose run --rm model-trainer \
-  python scripts/monitoring/compare_candidate_with_champion.py \
-    --set-tags
+  python scripts/monitoring/compare_candidate_with_champion.py
 ```
 
 The comparison reads MLflow run metrics for the `candidate` and `champion`
@@ -721,16 +721,20 @@ docker-compose run --rm model-trainer \
   python scripts/monitoring/compare_candidate_with_champion.py \
     --min-primary-delta 0.01 \
     --min-recall-delta 0.0 \
-    --min-precision-delta -0.02 \
-    --set-tags
+    --min-precision-delta -0.02
 ```
+
+This sanity check only prints its result and does not write evaluation status
+tags to the Candidate model version.
 
 ### Record Deployment Request After the Serving Gate
 
 The required promotion gate is
 `evaluate_candidate_serving_snapshot_gate`, described above. A passed Gate
-records its result in the Candidate model version tags but does not
-automatically create a deployment request.
+creates a completed MLflow evaluation run but does not automatically create a
+deployment request. The Candidate model version stores only a pointer to its
+latest published evaluation run. Candidate and Champion evaluations are rejected
+when both aliases resolve to the same model run.
 
 After the Gate passes, use the Airflow DAG:
 
@@ -743,12 +747,16 @@ For direct debugging from `container`, the equivalent command is:
 ```bash
 docker-compose run --rm model-trainer \
   python scripts/deployment/record_serving_candidate_deployment_request.py \
+    --evaluation-run-id 0123456789abcdef0123456789abcdef \
     --approval-status approved \
     --notes "serving prediction decision gate passed"
 ```
 
-This command verifies the Candidate's serving Gate tags and writes a
-`model_deployment_requests` row. Promotion with
+This command verifies that the evaluation run is complete and passed, is the
+Candidate's latest published evaluation, that its Candidate is the requested
+model, and that the current Champion still matches the Champion used by that
+evaluation. It then writes a
+`model_deployment_requests` row containing the evaluation summary. Promotion with
 `--require-approved-request` requires this approved request.
 
 The legacy `compare_candidate_with_champion_offline.py` is not part of the
@@ -762,15 +770,15 @@ Preferred path after a passed gate:
 ```bash
 docker-compose run --rm model-trainer \
   python scripts/deployment/promote_model_alias.py \
-    --source-alias candidate \
+    --request-id <request_id> \
     --target-alias champion \
     --require-approved-request
 ```
 
-When promotion uses `--source-alias`, the source alias is cleared by default
-after successful promotion. This keeps `candidate` as a review pointer rather
-than leaving both `candidate` and `champion` on the same model version. Use
-`--keep-source-alias` only when you intentionally want to keep both aliases.
+The request fixes the source model version and run ID. If the request records
+`candidate` as its source alias, that alias is cleared by default after
+successful promotion. Use `--keep-source-alias` only when you intentionally
+want to keep both aliases.
 
 `--require-approved-request` requires a matching `model_deployment_requests`
 row created after the Serving Gate:
@@ -779,12 +787,12 @@ row created after the Serving Gate:
 source_version = candidate version
 source_run_id = candidate run id
 target_alias = champion
-eval_type = serving_snapshot
+eval_type = serving_gate_evaluation
 eval_status = passed
 approval_status = approved
 ```
 
-After successful promotion, the matching request is marked `deployed`.
+After successful promotion, the matching request is marked `promoted`.
 
 You can also promote a concrete version. This does not clear `candidate`
 because no source alias was provided. Use this path mainly for rollback or
@@ -805,7 +813,8 @@ pointer:
 ```bash
 docker-compose run --rm model-trainer \
   python scripts/deployment/clear_model_alias.py \
-    --alias candidate
+    --alias candidate \
+    --cleanup-policy serving_snapshot_eval_rejected
 ```
 
 Alias invariant:
@@ -887,10 +896,11 @@ SELECT
   previous_version AS rollback_version,
   target_alias,
   approval_status,
+  rollout_status,
   to_timestamp(deployed_at) AS deployed_at
 FROM model_deployment_requests
 WHERE target_alias = 'champion'
-  AND approval_status = 'deployed'
+  AND rollout_status = 'deployed'
 ORDER BY deployed_at DESC
 LIMIT 5;
 "

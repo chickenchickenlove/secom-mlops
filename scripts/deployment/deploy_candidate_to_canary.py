@@ -17,6 +17,7 @@ from secom_mlops.monitor.deployments import (
     mark_deployment_request_rollout_status,
     normalize_request_id,
     upsert_runtime_deployment_state,
+    validate_serving_gate_eval_type,
 )
 from secom_mlops_common.config.mlflow import (
     DEFAULT_CHAMPION_ALIAS,
@@ -83,6 +84,8 @@ def validate_deployment_request(
         model_name: str,
         target_alias: str,
 ) -> None:
+    validate_serving_gate_eval_type(request)
+
     if request["model_name"] != model_name:
         raise RuntimeError(
             "deployment request model_name mismatch: "
