@@ -208,7 +208,7 @@ Serving Gate는 release decision cohort를 구성해 Dataset으로 먼저 영속
 4. `available_at <= T`인 label 중 sample별 최대 `label_revision`을 `LEFT JOIN`합니다.
 5. Decision 및 labeled Decision이 각각 1,000건 이상이고 label coverage 0.95 이상, fail/pass가 각각 20건 이상일 때만 Dataset을 만듭니다. 데이터 부족은 영속화하지 않고 Gate task를 실패시킵니다.
 6. Exact snapshot identity와 `feature_hash`가 일치하는 complete Feature를 Parquet으로 저장하고 MLflow `secom-serving-gate-datasets` experiment와 PostgreSQL `dataset_builds`에 READY 상태를 기록합니다.
-7. 다음 Airflow Task에는 내부 XCom으로 `dataset_id`만 전달합니다. 평가 Task는 READY catalog, manifest hash, artifact SHA-256과 Parquet schema를 검증한 뒤 labeled Decision 전체를 읽습니다.
+7. 다음 Airflow Task에는 내부 XCom으로 `dataset_id`만 전달합니다. 평가 Task는 READY catalog, manifest hash, artifact SHA-256과 Parquet schema를 검증한 뒤 labeled Decision 중 `predicted_at`, `prediction_id` 기준으로 최신 1,000개를 읽습니다.
 8. 평가를 시작할 때 candidate와 champion의 모델 버전을 각각 확인한 후, 동일한 Dataset에 대해 두 모델의 예측 성능을 비교합니다. 두 모델의 run ID가 같으면 Gate를 실패시킵니다. Dataset 생성 구간에 release였던 여러 source model run과 threshold는 row lineage로만 보존합니다.
 9. 평가 결과는 MLflow `secom-serving-gate-evaluations` experiment에 별도 evaluation run으로 기록합니다. 이 run에는 사용한 Dataset, candidate/champion의 정확한 model version과 run ID, Gate 기준 및 metric이 포함됩니다.
 

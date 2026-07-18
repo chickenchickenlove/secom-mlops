@@ -53,7 +53,7 @@ with DAG(
             "reset_canary_traffic": Param(True, type="boolean"),
             "notes": Param("post-release rollback requested", type="string"),
             "http_timeout_seconds": Param(180, type="integer"),
-            "dry_run": Param(True, type="boolean"),
+            "dry_run": Param(False, type="boolean"),
         },
         tags=["ml", "serving", "release", "rollback", "deployment"],
 ) as dag:

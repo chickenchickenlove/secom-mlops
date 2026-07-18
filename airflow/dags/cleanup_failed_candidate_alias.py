@@ -36,7 +36,7 @@ with DAG(
                 enum=["serving_snapshot_eval_rejected"],
                 type="string",
             ),
-            "dry_run": Param(True, type="boolean"),
+            "dry_run": Param(False, type="boolean"),
         },
         tags=["ml", "candidate", "cleanup", "mlflow"],
 ) as dag:
