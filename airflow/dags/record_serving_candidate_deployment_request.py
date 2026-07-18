@@ -15,8 +15,8 @@ from secom_mlops_common.config.mlflow import (
 with DAG(
         dag_id="record_serving_candidate_deployment_request",
         description=(
-                "Create a deployment request from a candidate model version only "
-                "after its serving snapshot evaluation has passed."
+                "Create a deployment request from a completed, passed serving-gate "
+                "MLflow evaluation run."
         ),
         start_date=pendulum.datetime(2026, 1, 1, tz="Asia/Seoul"),
         schedule=None,
@@ -40,6 +40,15 @@ with DAG(
                 ),
             ),
             "champion_alias": Param(DEFAULT_CHAMPION_ALIAS, type="string"),
+            "evaluation_run_id": Param(
+                "",
+                type="string",
+                title="Serving Gate evaluation run ID",
+                description=(
+                        "Required MLflow run ID emitted by "
+                        "evaluate_candidate_serving_snapshot_gate."
+                ),
+            ),
             "approval_status": Param(
                 "approved",
                 enum=["pending", "approved", "rejected"],
@@ -75,6 +84,14 @@ ARGS=(
   --requested-by "{{ params.requested_by }}"
 )
 
+EVALUATION_RUN_ID="{{ params.evaluation_run_id }}"
+EVALUATION_RUN_ID="${EVALUATION_RUN_ID#evaluation_run_id=}"
+if [ -z "${EVALUATION_RUN_ID//[[:space:]]/}" ] || [ "${EVALUATION_RUN_ID}" = "None" ] || [ "${EVALUATION_RUN_ID}" = "null" ]; then
+  echo "evaluation_run_id_required dag_id=record_serving_candidate_deployment_request"
+  exit 2
+fi
+ARGS+=(--evaluation-run-id "${EVALUATION_RUN_ID}")
+
 CANDIDATE_VERSION="{{ params.candidate_version }}"
 if [ -n "${CANDIDATE_VERSION}" ] && [ "${CANDIDATE_VERSION}" != "None" ] && [ "${CANDIDATE_VERSION}" != "null" ]; then
   ARGS+=(--candidate-version "${CANDIDATE_VERSION}")
@@ -91,7 +108,7 @@ case "{{ params.dry_run }}" in
     ;;
 esac
 
-echo "record_serving_candidate_deployment_request_command model_name={{ params.model_name }} candidate_alias={{ params.candidate_alias }} approval_status={{ params.approval_status }} dry_run={{ params.dry_run }}"
+echo "record_serving_candidate_deployment_request_command evaluation_run_id=${EVALUATION_RUN_ID} model_name={{ params.model_name }} candidate_alias={{ params.candidate_alias }} approval_status={{ params.approval_status }} dry_run={{ params.dry_run }}"
 
 "${ARGS[@]}"
 """,

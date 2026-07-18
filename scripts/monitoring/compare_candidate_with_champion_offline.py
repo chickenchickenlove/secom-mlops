@@ -56,7 +56,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-recall-delta", type=float, default=-0.02)
     parser.add_argument("--min-precision-delta", type=float, default=-0.05)
 
-    parser.add_argument("--set-tags", action="store_true")
     parser.add_argument("--record-deployment-request", action="store_true")
     parser.add_argument("--deployment-approval-status", default="approved")
     parser.add_argument("--deployment-notes", default=None)
@@ -285,47 +284,6 @@ def format_metric(value: Any) -> str:
     return str(value)
 
 
-def set_candidate_tags(
-        client: MlflowClient,
-        model_name: str,
-        candidate_version: str,
-        build_cutoff_time: float,
-        candidate_metrics: dict[str, Any],
-        champion_metrics: dict[str, Any],
-        passed: bool,
-        reasons: list[str],
-) -> None:
-    tags = {
-        "offline_gate_status": "passed" if passed else "failed",
-        "offline_gate_reason": " | ".join(reasons) if reasons else "ok",
-        "offline_eval_build_cutoff_time": str(build_cutoff_time),
-        "offline_eval_samples": str(candidate_metrics["n_samples"]),
-        "offline_eval_fail_samples": str(candidate_metrics["n_fail_samples"]),
-    }
-
-    for metric_name in [
-        "fail_f1",
-        "fail_recall",
-        "fail_precision",
-        "pr_auc",
-        "balanced_accuracy",
-        "accuracy",
-    ]:
-        tags[f"offline_candidate_{metric_name}"] = format_metric(candidate_metrics.get(metric_name))
-        tags[f"offline_champion_{metric_name}"] = format_metric(champion_metrics.get(metric_name))
-        tags[f"offline_delta_{metric_name}"] = format_metric(
-            metric_delta(candidate_metrics, champion_metrics, metric_name)
-        )
-
-    for key, value in tags.items():
-        client.set_model_version_tag(
-            model_name,
-            candidate_version,
-            key,
-            value,
-        )
-
-
 def build_metric_summary(
         build_cutoff_time: float,
         limit: int | None,
@@ -357,8 +315,8 @@ def build_metric_summary(
         "build_cutoff_time": build_cutoff_time,
         "limit": limit,
         "primary_metric": primary_metric,
-        "gate_status": "passed" if passed else "failed",
-        "gate_reasons": reasons,
+        "eval_status": "passed" if passed else "failed",
+        "eval_reasons": reasons,
         "candidate": {
             "model_version": candidate["model_version"],
             "model_run_id": candidate["model_run_id"],
@@ -398,7 +356,8 @@ def record_deployment_request(
         target_alias=args.champion_alias,
         previous_version=champion["model_version"],
         previous_run_id=champion["model_run_id"],
-        gate_status="passed",
+        eval_type="offline_candidate_vs_champion",
+        eval_status="passed",
         approval_status=args.deployment_approval_status,
         metric_summary=metric_summary,
         notes=args.deployment_notes,
@@ -450,18 +409,6 @@ def main() -> None:
         min_recall_delta=args.min_recall_delta,
         min_precision_delta=args.min_precision_delta,
     )
-
-    if args.set_tags:
-        set_candidate_tags(
-            client=client,
-            model_name=args.model_name,
-            candidate_version=candidate["model_version"],
-            build_cutoff_time=args.build_cutoff_time,
-            candidate_metrics=candidate_metrics,
-            champion_metrics=champion_metrics,
-            passed=passed,
-            reasons=reasons,
-        )
 
     metric_summary = build_metric_summary(
         build_cutoff_time=args.build_cutoff_time,
@@ -529,9 +476,9 @@ def main() -> None:
             f"delta={format_metric(metric_delta(candidate_metrics, champion_metrics, metric_name))}"
         )
 
-    print(f"gate_status={'passed' if passed else 'failed'}")
+    print(f"eval_status={'passed' if passed else 'failed'}")
     for reason in reasons:
-        print(f"gate_reason={reason}")
+        print(f"eval_reason={reason}")
 
     if deployment_request_id is not None:
         print(f"deployment_request_id={deployment_request_id}")

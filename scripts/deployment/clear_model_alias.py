@@ -6,12 +6,15 @@ import mlflow
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 
+from secom_mlops.monitor.serving_gate_evaluations import (
+    LATEST_EVALUATION_RUN_ID_TAG,
+    load_evaluation_run,
+)
 from secom_mlops_common.config.mlflow import resolve_model_name, resolve_tracking_uri
 
 CLEANUP_POLICIES: dict[str, dict[str, Any]] = {
     "serving_snapshot_eval_rejected": {
-        "required_tag": "candidate_serving_snapshot_eval_status",
-        "allowed_tag_values": ("failed", "insufficient_data"),
+        "allowed_evaluation_statuses": ("failed", "insufficient_data"),
         "review_status": "rejected",
     },
 }
@@ -45,8 +48,7 @@ def model_version_tags(model_version) -> dict[str, str]:
 def main() -> None:
     args = parse_args()
     policy = CLEANUP_POLICIES[args.cleanup_policy]
-    required_tag = str(policy["required_tag"])
-    allowed_tag_values = tuple(policy["allowed_tag_values"])
+    allowed_evaluation_statuses = tuple(policy["allowed_evaluation_statuses"])
     review_status = str(policy["review_status"])
 
     tracking_uri = resolve_tracking_uri(args.tracking_uri)
@@ -65,9 +67,32 @@ def main() -> None:
         return
 
     tags = model_version_tags(model_version)
-    actual_tag_value = tags.get(required_tag)
+    evaluation_run_id = tags.get(LATEST_EVALUATION_RUN_ID_TAG)
+    if not evaluation_run_id:
+        print(
+            "model_alias_clear_skipped "
+            f"tracking_uri={tracking_uri} model_name={args.model_name} "
+            f"alias={args.alias} version={model_version.version} "
+            f"reason=evaluation_pointer_not_found "
+            f"required_tag={LATEST_EVALUATION_RUN_ID_TAG}"
+        )
+        return
 
-    if actual_tag_value not in set(allowed_tag_values):
+    evaluation = load_evaluation_run(client, evaluation_run_id)
+    if (
+            evaluation.candidate_model_version != str(model_version.version)
+            or evaluation.candidate_model_run_id != str(model_version.run_id)
+    ):
+        print(
+            "model_alias_clear_skipped "
+            f"tracking_uri={tracking_uri} model_name={args.model_name} "
+            f"alias={args.alias} version={model_version.version} "
+            f"reason=evaluation_candidate_mismatch "
+            f"evaluation_run_id={evaluation_run_id}"
+        )
+        return
+
+    if evaluation.evaluation_status not in set(allowed_evaluation_statuses):
         print(
             "model_alias_clear_skipped "
             f"tracking_uri={tracking_uri} "
@@ -75,11 +100,11 @@ def main() -> None:
             f"alias={args.alias} "
             f"version={model_version.version} "
             f"run_id={model_version.run_id} "
-            "reason=required_tag_not_matched "
+            "reason=evaluation_status_not_matched "
             f"cleanup_policy={args.cleanup_policy} "
-            f"required_tag={required_tag} "
-            f"actual_tag_value={actual_tag_value} "
-            f"allowed_tag_values={','.join(allowed_tag_values)}"
+            f"evaluation_run_id={evaluation_run_id} "
+            f"evaluation_status={evaluation.evaluation_status} "
+            f"allowed_evaluation_statuses={','.join(allowed_evaluation_statuses)}"
         )
         return
 
@@ -92,8 +117,8 @@ def main() -> None:
             f"version={model_version.version} "
             f"run_id={model_version.run_id} "
             f"cleanup_policy={args.cleanup_policy} "
-            f"required_tag={required_tag} "
-            f"actual_tag_value={actual_tag_value} "
+            f"evaluation_run_id={evaluation_run_id} "
+            f"evaluation_status={evaluation.evaluation_status} "
             f"candidate_review_status={review_status}"
         )
         return
@@ -112,7 +137,10 @@ def main() -> None:
         return
 
     now = datetime.now(timezone.utc).isoformat()
-    review_reason = f"{required_tag}={actual_tag_value}"
+    review_reason = (
+        f"evaluation_run_id={evaluation_run_id};"
+        f"evaluation_status={evaluation.evaluation_status}"
+    )
 
     client.set_model_version_tag(args.model_name, model_version.version, "candidate_review_status", review_status)
     client.set_model_version_tag(args.model_name, model_version.version, "candidate_review_policy", args.cleanup_policy)
@@ -129,8 +157,8 @@ def main() -> None:
         f"version={model_version.version} "
         f"run_id={model_version.run_id} "
         f"cleanup_policy={args.cleanup_policy} "
-        f"required_tag={required_tag} "
-        f"actual_tag_value={actual_tag_value} "
+        f"evaluation_run_id={evaluation_run_id} "
+        f"evaluation_status={evaluation.evaluation_status} "
         f"candidate_review_status={review_status}"
     )
 

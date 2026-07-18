@@ -915,7 +915,6 @@ def train_and_register(args: argparse.Namespace) -> None:
             "cohort_end_time": metadata["cohort_end_time"],
             "cutoff_time": args.cutoff_time,
             "label_maturity_seconds": args.label_maturity_seconds,
-            "gate_status": "pending" if args.model_role == "candidate" else "not_required",
         }
 
         for key, value in version_tags.items():
@@ -958,8 +957,7 @@ def train_and_register(args: argparse.Namespace) -> None:
             f"best_f1_1={best_row['f1_1']} "
             f"best_recall_1={best_row['recall_1']} "
             f"best_precision_1={best_row['precision_1']} "
-            f"best_threshold={best_row['threshold']} "
-            f"gate_status={version_tags['gate_status']}"
+            f"best_threshold={best_row['threshold']}"
         )
 
 

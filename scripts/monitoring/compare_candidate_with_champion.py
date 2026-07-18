@@ -31,7 +31,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-primary-delta", type=float, default=0.0)
     parser.add_argument("--min-recall-delta", type=float, default=-0.02)
     parser.add_argument("--min-precision-delta", type=float, default=-0.05)
-    parser.add_argument("--set-tags", action="store_true")
     return parser.parse_args()
 
 
@@ -113,27 +112,6 @@ def evaluate_gate(
     return len(reasons) == 0, reasons
 
 
-def set_gate_tags(
-        client: MlflowClient,
-        model_name: str,
-        candidate_version: str,
-        passed: bool,
-        reasons: list[str],
-) -> None:
-    client.set_model_version_tag(
-        model_name,
-        candidate_version,
-        "gate_status",
-        "passed" if passed else "failed",
-    )
-    client.set_model_version_tag(
-        model_name,
-        candidate_version,
-        "gate_reason",
-        " | ".join(reasons) if reasons else "ok",
-    )
-
-
 def main() -> None:
     args = parse_args()
     tracking_uri = resolve_tracking_uri(args.tracking_uri)
@@ -167,15 +145,6 @@ def main() -> None:
         min_precision_delta=args.min_precision_delta,
     )
 
-    if args.set_tags:
-        set_gate_tags(
-            client=client,
-            model_name=args.model_name,
-            candidate_version=candidate["version"],
-            passed=passed,
-            reasons=reasons,
-        )
-
     print("candidate_vs_champion_comparison")
     print(f"tracking_uri={tracking_uri}")
     print(f"model_name={args.model_name}")
@@ -205,10 +174,10 @@ def main() -> None:
             f"delta={format_value(metric_delta)}"
         )
 
-    print(f"gate_status={'passed' if passed else 'failed'}")
+    print(f"eval_status={'passed' if passed else 'failed'}")
 
     for reason in reasons:
-        print(f"gate_reason={reason}")
+        print(f"eval_reason={reason}")
 
     if passed:
         print(

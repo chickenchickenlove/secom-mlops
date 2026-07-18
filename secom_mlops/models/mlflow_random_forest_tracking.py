@@ -419,9 +419,6 @@ def main():
         if MODEL_TRAINING_JOB_ID:
             version_tags["training_job_id"] = MODEL_TRAINING_JOB_ID
 
-        if MODEL_VERSION_ROLE == MODEL_ROLE_CANDIDATE:
-            version_tags["gate_status"] = "pending"
-
         for key, value in version_tags.items():
             client.set_model_version_tag(
                 MODEL_REGISTRY_NAME,
