@@ -53,7 +53,7 @@ with DAG(
                 type="string",
             ),
             "http_timeout_seconds": Param(180, type="integer"),
-            "dry_run": Param(True, type="boolean"),
+            "dry_run": Param(False, type="boolean"),
         },
         tags=["ml", "serving", "canary", "deployment"],
 ) as dag:

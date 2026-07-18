@@ -16,7 +16,8 @@ from sklearn.metrics import (
 
 from secom_mlops.datasets.serving_gate_dataset import (
     DECISION_SELECTION,
-    DEFAULT_MIN_LABELED_DECISIONS,
+    DEFAULT_MIN_FAIL_SAMPLES,
+    DEFAULT_MIN_PASS_SAMPLES,
     NEGATIVE_CLASS,
     POSITIVE_CLASS,
 )
@@ -26,6 +27,8 @@ from secom_mlops.datasets.serving_gate_dataset_loader import (
 from secom_mlops.monitor.serving_gate_evaluations import (
     COMPARISON_TYPE,
     DEFAULT_EXPERIMENT_NAME,
+    EVALUATION_DECISION_LIMIT,
+    EVALUATION_DECISION_SELECTION,
     EVALUATION_SCHEMA_VERSION,
     LATEST_EVALUATION_RUN_ID_TAG,
     evaluation_reason_json,
@@ -96,6 +99,33 @@ def validate_distinct_models(
         )
 
 
+def select_latest_labeled_decisions(
+        frame: pd.DataFrame,
+        *,
+        limit: int = EVALUATION_DECISION_LIMIT,
+) -> pd.DataFrame:
+    if limit <= 0:
+        raise ValueError("evaluation decision limit must be > 0")
+
+    labeled_frame = frame.loc[frame["label_event_id"].notna()].copy()
+    if len(labeled_frame) < limit:
+        raise RuntimeError(
+            "persisted serving-gate dataset has too few labeled decisions: "
+            f"required={limit} actual={len(labeled_frame)}"
+        )
+
+    latest = labeled_frame.sort_values(
+        ["predicted_at", "prediction_id"],
+        ascending=[False, False],
+        kind="mergesort",
+    ).head(limit)
+    return latest.sort_values(
+        ["predicted_at", "prediction_id"],
+        ascending=[True, True],
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+
 def load_labeled_serving_decisions(
         dataset_id: str,
         *,
@@ -103,20 +133,25 @@ def load_labeled_serving_decisions(
 ) -> tuple[pd.DataFrame, pd.Series, list[str], dict[str, Any]]:
     loaded = load_serving_gate_dataset(dataset_id, tracking_uri=tracking_uri)
     frame = loaded.frame
-    labeled = frame["label_event_id"].notna()
-    labeled_frame = frame.loc[labeled].copy()
-    labeled_count = len(labeled_frame)
-    if labeled_count < DEFAULT_MIN_LABELED_DECISIONS:
-        raise RuntimeError(
-            "persisted serving-gate dataset has too few labeled decisions: "
-            f"required={DEFAULT_MIN_LABELED_DECISIONS} actual={labeled_count}"
-        )
+    labeled_frame = select_latest_labeled_decisions(frame)
 
     y_true = labeled_frame["actual_value"].astype("int64")
     actual_values = set(y_true.unique())
     if not actual_values.issubset({NEGATIVE_CLASS, POSITIVE_CLASS}):
         raise RuntimeError(
             f"persisted serving-gate dataset has invalid targets: {sorted(actual_values)}"
+        )
+    evaluation_fail_count = int((y_true == POSITIVE_CLASS).sum())
+    evaluation_pass_count = int((y_true == NEGATIVE_CLASS).sum())
+    if evaluation_fail_count < DEFAULT_MIN_FAIL_SAMPLES:
+        raise RuntimeError(
+            "latest serving-gate evaluation decisions have too few fail labels: "
+            f"required={DEFAULT_MIN_FAIL_SAMPLES} actual={evaluation_fail_count}"
+        )
+    if evaluation_pass_count < DEFAULT_MIN_PASS_SAMPLES:
+        raise RuntimeError(
+            "latest serving-gate evaluation decisions have too few pass labels: "
+            f"required={DEFAULT_MIN_PASS_SAMPLES} actual={evaluation_pass_count}"
         )
     features = labeled_frame.loc[:, list(MODEL_COLUMNS)].astype("float64")
     prediction_ids = labeled_frame["prediction_id"].astype(str).tolist()
@@ -152,6 +187,13 @@ def load_labeled_serving_decisions(
         "source_thresholds": stats["source_thresholds"],
         "first_sample_id": str(frame.iloc[0]["sample_id"]),
         "last_sample_id": str(frame.iloc[-1]["sample_id"]),
+        "evaluation_decision_selection": EVALUATION_DECISION_SELECTION,
+        "evaluation_decision_limit": EVALUATION_DECISION_LIMIT,
+        "evaluation_decision_count": len(labeled_frame),
+        "evaluation_decision_time_min": float(labeled_frame["predicted_at"].min()),
+        "evaluation_decision_time_max": float(labeled_frame["predicted_at"].max()),
+        "evaluation_fail_count": evaluation_fail_count,
+        "evaluation_pass_count": evaluation_pass_count,
     }
     return features, y_true, prediction_ids, metadata
 
@@ -349,6 +391,17 @@ def log_evaluation_run(
             "cutoff_time": metadata["cutoff_time"],
             "label_maturity_seconds": metadata["label_maturity_seconds"],
             "decision_selection": metadata["decision_selection"],
+            "evaluation_decision_selection": metadata[
+                "evaluation_decision_selection"
+            ],
+            "evaluation_decision_limit": metadata["evaluation_decision_limit"],
+            "evaluation_decision_count": metadata["evaluation_decision_count"],
+            "evaluation_decision_time_min": metadata[
+                "evaluation_decision_time_min"
+            ],
+            "evaluation_decision_time_max": metadata[
+                "evaluation_decision_time_max"
+            ],
         })
 
         evaluation_metrics: dict[str, float] = {
@@ -359,6 +412,11 @@ def log_evaluation_run(
             "dataset_label_coverage": float(metadata["label_coverage"]),
             "dataset_fail_count": float(metadata["fail_count"]),
             "dataset_pass_count": float(metadata["pass_count"]),
+            "evaluation_decision_count": float(
+                metadata["evaluation_decision_count"]
+            ),
+            "evaluation_fail_count": float(metadata["evaluation_fail_count"]),
+            "evaluation_pass_count": float(metadata["evaluation_pass_count"]),
         }
         for name in metric_names():
             candidate_value = candidate_metrics.get(name)
@@ -415,6 +473,15 @@ def build_eval_summary(
         "cutoff_time": metadata["cutoff_time"],
         "label_maturity_seconds": metadata["label_maturity_seconds"],
         "decision_selection": metadata["decision_selection"],
+        "evaluation_selection": {
+            "decision_selection": metadata["evaluation_decision_selection"],
+            "decision_limit": metadata["evaluation_decision_limit"],
+            "decision_count": metadata["evaluation_decision_count"],
+            "decision_time_min": metadata["evaluation_decision_time_min"],
+            "decision_time_max": metadata["evaluation_decision_time_max"],
+            "fail_count": metadata["evaluation_fail_count"],
+            "pass_count": metadata["evaluation_pass_count"],
+        },
         "gate_policy": {
             "primary_metric": args.primary_metric,
             "min_primary_delta": args.min_primary_delta,
@@ -474,6 +541,20 @@ def print_result(
     print(f"n_pass_samples={metadata['pass_count']}")
     print(f"source_model_run_ids={metadata['source_model_run_ids']}")
     print(f"source_thresholds={metadata['source_thresholds']}")
+    print(
+        "evaluation_decision_selection="
+        f"{metadata['evaluation_decision_selection']}"
+    )
+    print(f"evaluation_decision_limit={metadata['evaluation_decision_limit']}")
+    print(f"n_evaluation_decisions={metadata['evaluation_decision_count']}")
+    print(
+        "evaluation_decision_time_min="
+        f"{metadata['evaluation_decision_time_min']}"
+    )
+    print(
+        "evaluation_decision_time_max="
+        f"{metadata['evaluation_decision_time_max']}"
+    )
     print(
         f"candidate version={candidate['model_version']} alias={candidate['model_alias']} "
         f"run_id={candidate['model_run_id']}"

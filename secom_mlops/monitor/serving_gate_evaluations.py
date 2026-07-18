@@ -9,8 +9,10 @@ from typing import Any
 import mlflow
 
 DEFAULT_EXPERIMENT_NAME = "secom-serving-gate-evaluations"
-EVALUATION_SCHEMA_VERSION = "serving_gate_evaluation.v1"
+EVALUATION_SCHEMA_VERSION = "serving_gate_evaluation.v2"
 COMPARISON_TYPE = "serving_gate_dataset_candidate_vs_champion"
+EVALUATION_DECISION_SELECTION = "latest_labeled_decisions"
+EVALUATION_DECISION_LIMIT = 1000
 LATEST_EVALUATION_RUN_ID_TAG = "candidate_serving_gate_latest_evaluation_run_id"
 EVALUATION_ARTIFACT_PATH = "evaluation/evaluation.json"
 
@@ -107,6 +109,21 @@ def parse_evaluation_run(run: Any, summary: dict[str, Any]) -> ServingGateEvalua
         ("candidate", "model_run_id"): record.candidate_model_run_id,
         ("champion", "model_version"): record.champion_model_version,
         ("champion", "model_run_id"): record.champion_model_run_id,
+        ("evaluation_selection", "decision_selection"): _required_param(
+            params, "evaluation_decision_selection"
+        ),
+        ("evaluation_selection", "decision_limit"): _required_param(
+            params, "evaluation_decision_limit"
+        ),
+        ("evaluation_selection", "decision_count"): _required_param(
+            params, "evaluation_decision_count"
+        ),
+        ("evaluation_selection", "decision_time_min"): _required_param(
+            params, "evaluation_decision_time_min"
+        ),
+        ("evaluation_selection", "decision_time_max"): _required_param(
+            params, "evaluation_decision_time_max"
+        ),
         ("gate_policy", "primary_metric"): _required_param(params, "primary_metric"),
         ("gate_policy", "min_primary_delta"): _required_param(
             params, "min_primary_delta"

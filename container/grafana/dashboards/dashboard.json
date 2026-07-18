@@ -596,7 +596,7 @@
       },
       "id": 37,
       "panels": [],
-      "title": "Active Release Quality",
+      "title": "Release Quality",
       "type": "row"
     },
     {
@@ -817,10 +817,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 12,
-        "y": 21
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 35
       },
       "id": 7,
       "options": {
@@ -842,7 +842,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'fail_f1' AS metric,\n  q.fail_f1 AS value\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time;",
+          "rawSql": "WITH ordered_release_reloads AS (\n  SELECT\n    ROW_NUMBER() OVER (ORDER BY completed_at, event_id) AS deployment_sequence,\n    completed_at AS active_from,\n    LEAD(completed_at) OVER (ORDER BY completed_at, event_id) AS active_until,\n    previous_model_version,\n    previous_model_run_id,\n    previous_threshold,\n    new_model_version,\n    new_model_run_id,\n    new_threshold\n  FROM model_runtime_reload_events\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n    AND reload_status = 'succeeded'\n    AND completed_at IS NOT NULL\n),\nrelease_periods AS (\n  SELECT\n    0::BIGINT AS deployment_sequence,\n    0::DOUBLE PRECISION AS active_from,\n    active_from AS active_until,\n    previous_model_version AS model_version,\n    previous_model_run_id AS model_run_id,\n    previous_threshold AS threshold\n  FROM ordered_release_reloads\n  WHERE deployment_sequence = 1\n    AND previous_model_run_id IS NOT NULL\n\n  UNION ALL\n\n  SELECT\n    deployment_sequence,\n    active_from,\n    active_until,\n    new_model_version AS model_version,\n    new_model_run_id AS model_run_id,\n    new_threshold AS threshold\n  FROM ordered_release_reloads\n\n  UNION ALL\n\n  SELECT\n    0::BIGINT AS deployment_sequence,\n    0::DOUBLE PRECISION AS active_from,\n    NULL::DOUBLE PRECISION AS active_until,\n    active_model_version AS model_version,\n    active_model_run_id AS model_run_id,\n    active_threshold AS threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n    AND NOT EXISTS (SELECT 1 FROM ordered_release_reloads)\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'release #' || p.deployment_sequence ||\n    ' / v' || p.model_version ||\n    ' / run=' || LEFT(p.model_run_id, 8) ||\n    ' / fail_f1' AS metric,\n  q.fail_f1 AS value\nFROM live_model_quality_evaluations q\nJOIN release_periods p\n  ON q.model_run_id = p.model_run_id\n AND q.threshold IS NOT DISTINCT FROM p.threshold\n AND q.cutoff_time >= p.active_from\n AND (p.active_until IS NULL OR q.cutoff_time < p.active_until)\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\n  AND q.evaluation_status = 'ok'\n  AND q.fail_f1 IS NOT NULL\nORDER BY time, metric;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -863,7 +863,8 @@
           }
         }
       ],
-      "title": "Fail F1 - Active Release",
+      "description": "성공한 release reload 이력을 기준으로, 각 모델이 실제 release였던 구간의 슬라이딩 Fail F1만 표시합니다. evaluation_status가 ok인 결과만 사용하며, rollback으로 같은 모델이 다시 배포되어도 deployment sequence별로 선을 분리합니다.",
+      "title": "Fail F1 - Release History",
       "type": "timeseries",
       "collapsed": false
     },
@@ -930,8 +931,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
+        "w": 8,
+        "x": 8,
         "y": 35
       },
       "id": 43,
@@ -954,7 +955,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'fail_recall' AS metric,\n  q.fail_recall AS value\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time;",
+          "rawSql": "WITH ordered_release_reloads AS (\n  SELECT\n    ROW_NUMBER() OVER (ORDER BY completed_at, event_id) AS deployment_sequence,\n    completed_at AS active_from,\n    LEAD(completed_at) OVER (ORDER BY completed_at, event_id) AS active_until,\n    previous_model_version,\n    previous_model_run_id,\n    previous_threshold,\n    new_model_version,\n    new_model_run_id,\n    new_threshold\n  FROM model_runtime_reload_events\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n    AND reload_status = 'succeeded'\n    AND completed_at IS NOT NULL\n),\nrelease_periods AS (\n  SELECT\n    0::BIGINT AS deployment_sequence,\n    0::DOUBLE PRECISION AS active_from,\n    active_from AS active_until,\n    previous_model_version AS model_version,\n    previous_model_run_id AS model_run_id,\n    previous_threshold AS threshold\n  FROM ordered_release_reloads\n  WHERE deployment_sequence = 1\n    AND previous_model_run_id IS NOT NULL\n\n  UNION ALL\n\n  SELECT\n    deployment_sequence,\n    active_from,\n    active_until,\n    new_model_version AS model_version,\n    new_model_run_id AS model_run_id,\n    new_threshold AS threshold\n  FROM ordered_release_reloads\n\n  UNION ALL\n\n  SELECT\n    0::BIGINT AS deployment_sequence,\n    0::DOUBLE PRECISION AS active_from,\n    NULL::DOUBLE PRECISION AS active_until,\n    active_model_version AS model_version,\n    active_model_run_id AS model_run_id,\n    active_threshold AS threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n    AND NOT EXISTS (SELECT 1 FROM ordered_release_reloads)\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'release #' || p.deployment_sequence ||\n    ' / v' || p.model_version ||\n    ' / run=' || LEFT(p.model_run_id, 8) ||\n    ' / fail_recall' AS metric,\n  q.fail_recall AS value\nFROM live_model_quality_evaluations q\nJOIN release_periods p\n  ON q.model_run_id = p.model_run_id\n AND q.threshold IS NOT DISTINCT FROM p.threshold\n AND q.cutoff_time >= p.active_from\n AND (p.active_until IS NULL OR q.cutoff_time < p.active_until)\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\n  AND q.evaluation_status = 'ok'\n  AND q.fail_recall IS NOT NULL\nORDER BY time, metric;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -975,8 +976,8 @@
           }
         }
       ],
-      "description": "각 점은 cutoff 시각 T에 계산된 Active Release의 슬라이딩 Recall입니다. 현재 설정에서는 [T-11분, T-1분)의 prediction을 사용합니다(10분 monitoring window, label maturity 60초). 평가 기준을 통과한 경우에만 Recall 값이 기록되며, Grafana 조회 시간 범위는 화면에 표시할 cutoff 시각만 선택합니다.",
-      "title": "Fail Recall - Active Release",
+      "description": "성공한 release reload 이력을 기준으로, 각 모델이 실제 release였던 구간의 슬라이딩 Fail Recall만 표시합니다. evaluation_status가 ok인 결과만 사용하며, rollback으로 같은 모델이 다시 배포되어도 deployment sequence별로 선을 분리합니다.",
+      "title": "Fail Recall - Release History",
       "type": "timeseries",
       "collapsed": false
     },
@@ -1042,10 +1043,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 18,
-        "y": 21
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 35
       },
       "id": 44,
       "options": {
@@ -1067,7 +1068,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH active_release AS (\n  SELECT\n    active_model_run_id,\n    active_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'fail_precision' AS metric,\n  q.fail_precision AS value\nFROM live_model_quality_evaluations q\nJOIN active_release r\n  ON q.model_run_id = r.active_model_run_id\n AND q.threshold IS NOT DISTINCT FROM r.active_threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time;",
+          "rawSql": "WITH ordered_release_reloads AS (\n  SELECT\n    ROW_NUMBER() OVER (ORDER BY completed_at, event_id) AS deployment_sequence,\n    completed_at AS active_from,\n    LEAD(completed_at) OVER (ORDER BY completed_at, event_id) AS active_until,\n    previous_model_version,\n    previous_model_run_id,\n    previous_threshold,\n    new_model_version,\n    new_model_run_id,\n    new_threshold\n  FROM model_runtime_reload_events\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n    AND reload_status = 'succeeded'\n    AND completed_at IS NOT NULL\n),\nrelease_periods AS (\n  SELECT\n    0::BIGINT AS deployment_sequence,\n    0::DOUBLE PRECISION AS active_from,\n    active_from AS active_until,\n    previous_model_version AS model_version,\n    previous_model_run_id AS model_run_id,\n    previous_threshold AS threshold\n  FROM ordered_release_reloads\n  WHERE deployment_sequence = 1\n    AND previous_model_run_id IS NOT NULL\n\n  UNION ALL\n\n  SELECT\n    deployment_sequence,\n    active_from,\n    active_until,\n    new_model_version AS model_version,\n    new_model_run_id AS model_run_id,\n    new_threshold AS threshold\n  FROM ordered_release_reloads\n\n  UNION ALL\n\n  SELECT\n    0::BIGINT AS deployment_sequence,\n    0::DOUBLE PRECISION AS active_from,\n    NULL::DOUBLE PRECISION AS active_until,\n    active_model_version AS model_version,\n    active_model_run_id AS model_run_id,\n    active_threshold AS threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n    AND NOT EXISTS (SELECT 1 FROM ordered_release_reloads)\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  'release #' || p.deployment_sequence ||\n    ' / v' || p.model_version ||\n    ' / run=' || LEFT(p.model_run_id, 8) ||\n    ' / fail_precision' AS metric,\n  q.fail_precision AS value\nFROM live_model_quality_evaluations q\nJOIN release_periods p\n  ON q.model_run_id = p.model_run_id\n AND q.threshold IS NOT DISTINCT FROM p.threshold\n AND q.cutoff_time >= p.active_from\n AND (p.active_until IS NULL OR q.cutoff_time < p.active_until)\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\n  AND q.evaluation_status = 'ok'\n  AND q.fail_precision IS NOT NULL\nORDER BY time, metric;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1088,7 +1089,8 @@
           }
         }
       ],
-      "title": "Fail Precision - Active Release",
+      "description": "성공한 release reload 이력을 기준으로, 각 모델이 실제 release였던 구간의 슬라이딩 Fail Precision만 표시합니다. evaluation_status가 ok인 결과만 사용하며, rollback으로 같은 모델이 다시 배포되어도 deployment sequence별로 선을 분리합니다.",
+      "title": "Fail Precision - Release History",
       "type": "timeseries",
       "collapsed": false
     },
@@ -1344,10 +1346,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 12,
-        "y": 35
+        "y": 21
       },
       "id": 3,
       "options": {
@@ -1402,214 +1404,6 @@
         "x": 0,
         "y": 43
       },
-      "id": 36,
-      "panels": [],
-      "title": "Active vs Previous",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "monitoring-postgres"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 44
-      },
-      "id": 45,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nactive_latest AS (\n  SELECT q.*\n  FROM live_model_quality_evaluations q\n  JOIN release_state r\n    ON q.model_run_id = r.active_model_run_id\n   AND q.threshold IS NOT DISTINCT FROM r.active_threshold\n  ORDER BY q.cutoff_time DESC, q.evaluation_id DESC\n  LIMIT 1\n),\nprevious_latest AS (\n  SELECT q.*\n  FROM live_model_quality_evaluations q\n  JOIN release_state r\n    ON q.model_run_id = r.previous_model_run_id\n   AND q.threshold IS NOT DISTINCT FROM r.previous_threshold\n  WHERE r.previous_model_run_id IS NOT NULL\n  ORDER BY q.cutoff_time DESC, q.evaluation_id DESC\n  LIMIT 1\n)\nSELECT\n  metric.metric_name,\n  metric.active_value,\n  metric.previous_value,\n  metric.active_value - metric.previous_value AS delta,\n  a.evaluation_status AS active_status,\n  p.evaluation_status AS previous_status,\n  a.n_samples AS active_labeled_decisions,\n  p.n_samples AS previous_labeled_decisions,\n  a.n_fail_samples AS active_fail_samples,\n  p.n_fail_samples AS previous_fail_samples,\n  to_timestamp(a.cutoff_time) AS active_cutoff_time,\n  to_timestamp(p.cutoff_time) AS previous_cutoff_time\nFROM active_latest a\nLEFT JOIN previous_latest p\n  ON TRUE\nCROSS JOIN LATERAL (\n  VALUES\n    (1, 'fail_f1', a.fail_f1, p.fail_f1),\n    (2, 'fail_recall', a.fail_recall, p.fail_recall),\n    (3, 'fail_precision', a.fail_precision, p.fail_precision),\n    (4, 'fail_average_precision', a.fail_average_precision, p.fail_average_precision),\n    (5, 'accuracy', a.accuracy, p.accuracy)\n) AS metric(sort_order, metric_name, active_value, previous_value)\nORDER BY metric.sort_order;",
-          "refId": "A",
-          "sql": {
-            "columns": [
-              {
-                "parameters": [],
-                "type": "function"
-              }
-            ],
-            "groupBy": [
-              {
-                "property": {
-                  "type": "string"
-                },
-                "type": "groupBy"
-              }
-            ],
-            "limit": 50
-          }
-        }
-      ],
-      "title": "Active vs Previous Release - Latest Delta",
-      "type": "table",
-      "collapsed": false
-    },
-    {
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "monitoring-postgres"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "axisSoftMax": 1,
-            "axisSoftMin": 0,
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 52
-      },
-      "id": 46,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "all",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "WITH release_state AS (\n  SELECT\n    active_model_run_id,\n    active_threshold,\n    previous_model_run_id,\n    previous_threshold\n  FROM model_runtime_deployment_state\n  WHERE model_name = 'secom-fail-detector'\n    AND runtime_slot = 'release'\n),\nselected AS (\n  SELECT\n    active_model_run_id AS model_run_id,\n    active_threshold AS threshold,\n    'active' AS model_slot\n  FROM release_state\n\n  UNION ALL\n\n  SELECT\n    previous_model_run_id AS model_run_id,\n    previous_threshold AS threshold,\n    'previous' AS model_slot\n  FROM release_state\n  WHERE previous_model_run_id IS NOT NULL\n)\nSELECT\n  to_timestamp(q.cutoff_time) AS time,\n  s.model_slot || ' / fail_f1' AS metric,\n  q.fail_f1 AS value\nFROM live_model_quality_evaluations q\nJOIN selected s\n  ON q.model_run_id = s.model_run_id\n AND q.threshold IS NOT DISTINCT FROM s.threshold\nWHERE q.cutoff_time >= ${__from:date:seconds}\n  AND q.cutoff_time < ${__to:date:seconds}\nORDER BY time, metric;",
-          "refId": "A",
-          "sql": {
-            "columns": [
-              {
-                "parameters": [],
-                "type": "function"
-              }
-            ],
-            "groupBy": [
-              {
-                "property": {
-                  "type": "string"
-                },
-                "type": "groupBy"
-              }
-            ],
-            "limit": 50
-          }
-        }
-      ],
-      "title": "Active vs Previous Release - F1 Trend",
-      "type": "timeseries",
-      "collapsed": false
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 60
-      },
       "id": 30,
       "panels": [],
       "title": "Drift / Data Quality - Fixed Reference",
@@ -1652,7 +1446,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 44
       },
       "id": 31,
       "options": {
@@ -1761,7 +1555,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 68
+        "y": 51
       },
       "id": 32,
       "options": {
@@ -1871,7 +1665,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 68
+        "y": 51
       },
       "id": 33,
       "options": {
@@ -1955,7 +1749,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 76
+        "y": 59
       },
       "id": 48,
       "options": {
@@ -2062,7 +1856,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 76
+        "y": 59
       },
       "id": 51,
       "options": {
@@ -2146,7 +1940,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 67
       },
       "id": 34,
       "options": {
@@ -2229,7 +2023,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 92
+        "y": 75
       },
       "id": 35,
       "options": {
@@ -2281,7 +2075,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 100
+        "y": 83
       },
       "id": 29,
       "panels": [],
@@ -2325,7 +2119,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 101
+        "y": 84
       },
       "id": 28,
       "options": {
@@ -2434,7 +2228,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 108
+        "y": 91
       },
       "id": 13,
       "options": {
@@ -2556,7 +2350,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 108
+        "y": 91
       },
       "id": 14,
       "options": {
@@ -2650,7 +2444,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 116
+        "y": 99
       },
       "id": 20,
       "options": {
@@ -2754,7 +2548,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 124
+        "y": 107
       },
       "id": 21,
       "options": {
@@ -2827,7 +2621,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 132
+        "y": 115
       },
       "id": 27,
       "panels": [],
@@ -2899,7 +2693,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 133
+        "y": 116
       },
       "id": 47,
       "options": {
@@ -2983,7 +2777,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 133
+        "y": 116
       },
       "id": 9,
       "options": {
@@ -3035,7 +2829,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 141
+        "y": 124
       },
       "id": 22,
       "panels": [],
@@ -3079,7 +2873,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 142
+        "y": 125
       },
       "id": 25,
       "options": {
@@ -3190,7 +2984,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 149
+        "y": 132
       },
       "id": 24,
       "options": {
@@ -3288,7 +3082,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 149
+        "y": 132
       },
       "id": 26,
       "options": {
@@ -3350,7 +3144,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 157
+        "y": 140
       },
       "id": 23,
       "panels": [],
@@ -3422,7 +3216,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 159
+        "y": 142
       },
       "id": 38,
       "options": {
@@ -3522,7 +3316,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 159
+        "y": 142
       },
       "id": 39,
       "options": {
@@ -3623,7 +3417,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 167
+        "y": 150
       },
       "id": 41,
       "options": {
@@ -3725,7 +3519,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 167
+        "y": 150
       },
       "id": 40,
       "options": {
@@ -3766,7 +3560,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 175
+        "y": 158
       },
       "id": 58,
       "panels": [],
@@ -3863,7 +3657,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 176
+        "y": 159
       },
       "id": 59,
       "options": {
@@ -3966,7 +3760,7 @@
         "h": 9,
         "w": 10,
         "x": 14,
-        "y": 176
+        "y": 159
       },
       "id": 60,
       "options": {
@@ -4060,7 +3854,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 185
+        "y": 168
       },
       "id": 61,
       "options": {
@@ -4094,7 +3888,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 193
+        "y": 176
       },
       "id": 62,
       "panels": [],
@@ -4191,7 +3985,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 194
+        "y": 177
       },
       "id": 63,
       "options": {
@@ -4294,7 +4088,7 @@
         "h": 9,
         "w": 10,
         "x": 14,
-        "y": 194
+        "y": 177
       },
       "id": 64,
       "options": {
@@ -4388,7 +4182,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 203
+        "y": 186
       },
       "id": 65,
       "options": {

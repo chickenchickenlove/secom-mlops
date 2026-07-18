@@ -27,7 +27,7 @@ with DAG(
                 enum=[0, 1, 5, 10, 50, 100],
                 type="integer",
             ),
-            "dry_run": Param(True, type="boolean"),
+            "dry_run": Param(False, type="boolean"),
         },
         tags=["ml", "serving", "gateway", "canary"],
 ) as dag:

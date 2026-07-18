@@ -62,7 +62,7 @@ with DAG(
             ),
             "requested_by": Param("airflow", type="string"),
             "approved_by": Param("", type="string"),
-            "dry_run": Param(True, type="boolean"),
+            "dry_run": Param(False, type="boolean"),
         },
         tags=["ml", "serving", "candidate", "deployment"],
 ) as dag:

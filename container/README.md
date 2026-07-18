@@ -654,8 +654,9 @@ revision with `available_at <= cutoff_time`.
 
 The Dataset is persisted to MLflow and `dataset_builds` before evaluation. The
 downstream task receives only `dataset_id`, downloads and verifies the artifact,
-and replays one pinned Candidate and one pinned Champion version on every
-labeled Feature vector. The Airflow task succeeds only when the Gate status is
+and replays one pinned Candidate and one pinned Champion version on the latest
+1,000 labeled Decisions ordered by `predicted_at` and `prediction_id`. The
+Airflow task succeeds only when the Gate status is
 `passed`; insufficient data, metric failure, and integrity errors fail the task.
 
 Every completed comparison creates a separate MLflow run in
