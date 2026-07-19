@@ -17,6 +17,10 @@ from secom_mlops.serving.api.model import (
     PredictionEventContext,
     PendingInvocation,
 )
+from secom_mlops.serving.api.metrics import (
+    PredictionDestination,
+    PredictionMetrics,
+)
 from secom_mlops.serving.api.prediction_event_publisher import PredictionEventPublisher
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,8 @@ class PredictionBatcher:
         self,
         client: ModelGatewayClient,
         event_publisher: PredictionEventPublisher,
+        prediction_metrics: PredictionMetrics,
+        destination: PredictionDestination,
         max_batch_size: int,
         max_wait_seconds: float,
         queue_max_size: int,
@@ -34,6 +40,8 @@ class PredictionBatcher:
     ) -> None:
         self._client = client
         self._event_publisher = event_publisher
+        self._prediction_metrics = prediction_metrics
+        self._destination = destination
         self._max_batch_size = max_batch_size
         self._max_wait_seconds = max_wait_seconds
         self._queue_timeout_seconds = queue_timeout_seconds
@@ -207,6 +215,24 @@ class PredictionBatcher:
 
         if not active:
             return
+
+        prediction_count = sum(
+            pending.event_context is not None
+            for pending in active
+        )
+        if prediction_count:
+            try:
+                self._prediction_metrics.record_dispatch(
+                    self._destination,
+                    prediction_count,
+                )
+            except Exception:
+                logger.exception(
+                    "prediction_dispatch_metric_record_failed "
+                    "destination=%s prediction_count=%s",
+                    self._destination,
+                    prediction_count,
+                )
 
         try:
             predictions = await self._client.invoke_batch(

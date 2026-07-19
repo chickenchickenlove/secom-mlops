@@ -6,7 +6,8 @@ from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from valkey.exceptions import ValkeyError
 
 from secom_mlops.feature_store.online_snapshot_reader import (
@@ -19,6 +20,7 @@ from secom_mlops.serving.api.batch import PredictionBatcher
 from secom_mlops.serving.api.client import ModelGatewayClient
 from secom_mlops.serving.api.config import ServingApiConfig
 from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.metrics import prediction_metrics
 from secom_mlops.serving.api.model import PredictionEventContext
 from secom_mlops.serving.api.prediction_event_publisher import (
     BufferedPredictionEventPublisher,
@@ -81,6 +83,8 @@ async def lifespan(fast_api_app: FastAPI):
     fast_api_app.state.primary_prediction_batcher = PredictionBatcher(
         client=fast_api_app.state.model_gateway_client,
         event_publisher=fast_api_app.state.prediction_event_publisher,
+        prediction_metrics=prediction_metrics,
+        destination="release",
         max_batch_size=config.model_batch_max_size,
         max_wait_seconds=config.model_batch_max_wait_seconds,
         queue_max_size=config.model_batch_queue_max_size,
@@ -90,6 +94,8 @@ async def lifespan(fast_api_app: FastAPI):
     fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
         client=fast_api_app.state.shadow_model_gateway_client,
         event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
+        prediction_metrics=prediction_metrics,
+        destination="shadow",
         max_batch_size=config.model_batch_max_size,
         max_wait_seconds=config.model_batch_max_wait_seconds,
         queue_max_size=config.model_batch_queue_max_size,
@@ -123,6 +129,14 @@ app = FastAPI(title="SECOM Fail Detection API", lifespan=lifespan)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    return Response(
+        content=generate_latest(),
+        headers={"Content-Type": CONTENT_TYPE_LATEST},
+    )
 
 
 @app.post("/predict", response_model=BatchPredictResponse)

@@ -14,7 +14,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 - `build_periodic_training_dataset` DAG는 5분마다 point-in-time readiness를 확인하고, maturity만큼 이동한 Airflow data interval의 versioned training-source dataset을 영속화합니다.
 - Candidate 학습은 `serving_feature_snapshots`에서 `available_at` 기준 first-complete snapshot을 선택하고, `label_events` correction history를 cutoff 기준으로 결합합니다.
 - Candidate Gate는 release prediction decision으로 평가 Dataset을 먼저 영속화하고, 그 dataset을 다시 불러와 Candidate와 Champion을 비교합니다.
-- Grafana는 PostgreSQL metric table과 Prometheus Kafka metric을 함께 시각화합니다.
+- Grafana는 PostgreSQL metric table과 Prometheus의 Kafka 및 Serving dispatch metric을 함께 시각화합니다.
 - Grafana에서 오프라인 학습 데이터와 serving gate를 위한 데이터셋 구축에 필요한 Label Maturity를 10분 단위로 확인할 수 있습니다.
 
 ## 현재 범위
@@ -300,7 +300,7 @@ S = E-W
 - `(model_run_id, threshold)`별로 evaluation wide row 하나를 append합니다. Cohort/count/status/confusion은 항상 기록하고 scalar quality metric은 `evaluation_status='ok'`일 때만 기록합니다.
 - `model_metrics`는 offline evaluation 결과용으로 유지되며, 해당 reader의 `label_events` 전환은 후속 작업입니다.
 - `evaluate_drift_metrics.py`, `create_drift_reference_baseline.py`, `evaluate_fixed_reference_drift_metrics.py`는 logical identity와 `feature_hash`를 함께 확인해 serving snapshot의 feature vector를 읽습니다. `prediction_logs`는 feature vector 대신 실제 inference에 사용한 snapshot reference와 hash를 보관합니다.
-- Kafka 운영 지표는 Prometheus를 거쳐 Grafana로 들어갑니다.
+- Kafka 운영 지표와 Serving API의 Release/Shadow prediction dispatch 지표는 Prometheus를 거쳐 Grafana로 들어갑니다.
 
 ## Runtime Services
 
