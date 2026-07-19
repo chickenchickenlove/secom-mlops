@@ -121,7 +121,7 @@ class BufferedPredictionEventPublisher:
 
                     batch.append(event)
 
-                await asyncio.to_thread(self._sink.publish_many, batch)
+                self._sink.publish_many(batch)
             except asyncio.CancelledError:
                 raise
             except Exception:
