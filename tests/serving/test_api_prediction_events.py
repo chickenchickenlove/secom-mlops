@@ -3,39 +3,87 @@ import unittest
 from types import SimpleNamespace
 
 from secom_mlops.feature_store.online_snapshot_reader import OnlineFeatureSnapshot
-from secom_mlops.serving.api import (
-    BatchPredictRequest,
-    PredictByIdRequest,
-    PredictRow,
-    _build_snapshot_prediction_event,
+from secom_mlops.serving.api.app import (
     predict,
     predict_by_id,
 )
+from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.model import PredictionEventContext
+from secom_mlops.serving.api.batch import PredictionBatcher
+from secom_mlops.serving.api.schemas import (
+    BatchPredictRequest,
+    PredictByIdRequest,
+    PredictRow,
+)
+from secom_mlops.serving.api.utils import build_snapshot_prediction_event
 from secom_mlops_common.schemas.secom import FEATURE_KEYS, NUM_FEATURES
 
 FEATURE_HASH = "sha256:v1:" + "0" * 64
 
 
-class _FakeModelGatewayBatcher:
+class _FakePredictionService:
+    def __init__(self) -> None:
+        self.inputs: list[list[list[float | None]]] = []
+        self.event_contexts: list[PredictionEventContext | None] = []
+
+    async def predict(
+        self,
+        features: list[float | None],
+        *,
+        event_context: PredictionEventContext,
+    ) -> dict[str, object]:
+        self.inputs.append([features])
+        self.event_contexts.append(event_context)
+        return _model_prediction()
+
+    async def predict_debug_many(
+        self,
+        inputs: list[list[float | None]],
+    ) -> list[dict[str, object]]:
+        self.inputs.append(inputs)
+        self.event_contexts.append(None)
+        return [_model_prediction() for _ in inputs]
+
+
+class _FakeModelGatewayClient:
     def __init__(self) -> None:
         self.inputs: list[list[list[float | None]]] = []
 
-    async def invoke_many(self, inputs: list[list[float | None]]) -> list[dict[str, object]]:
+    async def invoke_batch(
+        self,
+        inputs: list[list[float | None]],
+    ) -> list[dict[str, object]]:
         self.inputs.append(inputs)
         return [_model_prediction() for _ in inputs]
 
 
-class _CapturingPredictionEventProducer:
+class _MalformedThenValidModelGatewayClient:
     def __init__(self) -> None:
-        self.batches: list[list[dict[str, object]]] = []
+        self.calls = 0
 
-    def publish_many(self, events: list[dict[str, object]]) -> None:
-        self.batches.append(events)
+    async def invoke_batch(
+        self,
+        inputs: list[list[float | None]],
+    ) -> list[object]:
+        self.calls += 1
+        if self.calls == 1:
+            return [None for _ in inputs]
+        return [_model_prediction() for _ in inputs]
 
 
-class _FailingPredictionEventProducer:
-    def publish_many(self, events: list[dict[str, object]]) -> None:
-        raise AssertionError(f"/predict must not publish prediction events: {events}")
+class _CapturingPredictionEventPublisher:
+    def __init__(self, *, accepted: bool = True) -> None:
+        self.accepted = accepted
+        self.events: list[dict[str, object]] = []
+
+    def submit_nowait(self, event: dict[str, object]) -> bool:
+        self.events.append(event)
+        return self.accepted
+
+
+class _FailingPredictionEventPublisher:
+    def submit_nowait(self, event: dict[str, object]) -> bool:
+        raise RuntimeError(f"publisher stopped: {event['prediction_id']}")
 
 
 class _FakeOnlineSnapshotStore:
@@ -50,7 +98,7 @@ class _FakeOnlineSnapshotStore:
 
 class ServingPredictionEventTest(unittest.TestCase):
     def test_snapshot_event_contains_reference_without_features(self) -> None:
-        event = _build_snapshot_prediction_event(
+        event = build_snapshot_prediction_event(
             prediction_id="prediction-001",
             request_id="request-001",
             sample_id="secom-0000001",
@@ -69,12 +117,152 @@ class ServingPredictionEventTest(unittest.TestCase):
         self.assertNotIn("features", event)
         self.assertEqual(1, event["missing_count"])
 
+    def test_prediction_batcher_submits_event_after_inference(self) -> None:
+        async def scenario() -> None:
+            client = _FakeModelGatewayClient()
+            publisher = _CapturingPredictionEventPublisher()
+            batcher = _prediction_batcher(client, publisher)
+            context = PredictionEventContext(
+                prediction_id="prediction-001",
+                request_id="request-001",
+                sample_id="secom-0000001",
+                serving_snapshot_id="state:secom-0000001:1000:3",
+                snapshot_version=3,
+                feature_hash=FEATURE_HASH,
+                missing_count=1,
+            )
+            features = [float(index) for index in range(NUM_FEATURES)]
+            batcher.start()
+
+            try:
+                prediction = await batcher.invoke(
+                    features,
+                    event_context=context,
+                )
+            finally:
+                await batcher.close()
+
+            self.assertEqual(-1, prediction["prediction"])
+            self.assertEqual([[features]], client.inputs)
+            self.assertEqual(1, len(publisher.events))
+            event = publisher.events[0]
+            self.assertEqual("prediction-001", event["prediction_id"])
+            self.assertEqual("request-001", event["request_id"])
+            self.assertEqual(context.serving_snapshot_id, event["serving_snapshot_id"])
+            self.assertEqual(context.feature_hash, event["feature_hash"])
+            self.assertEqual("release", event["runtime_slot"])
+            self.assertGreaterEqual(event["latency_ms"], 0)
+
+        asyncio.run(scenario())
+
+    def test_prediction_batcher_invoke_many_does_not_submit_events(self) -> None:
+        async def scenario() -> None:
+            publisher = _CapturingPredictionEventPublisher()
+            batcher = _prediction_batcher(_FakeModelGatewayClient(), publisher)
+            batcher.start()
+
+            try:
+                predictions = await batcher.invoke_many([
+                    [0.0] * NUM_FEATURES,
+                    [1.0] * NUM_FEATURES,
+                ])
+            finally:
+                await batcher.close()
+
+            self.assertEqual(2, len(predictions))
+            self.assertEqual([], publisher.events)
+
+        asyncio.run(scenario())
+
+    def test_prediction_batcher_survives_malformed_prediction(self) -> None:
+        async def scenario() -> None:
+            client = _MalformedThenValidModelGatewayClient()
+            publisher = _CapturingPredictionEventPublisher()
+            batcher = _prediction_batcher(client, publisher)
+            batcher.start()
+
+            try:
+                with self.assertRaisesRegex(
+                    ModelGatewayError,
+                    "model gateway prediction must be an object",
+                ):
+                    await batcher.invoke_many([[0.0] * NUM_FEATURES])
+
+                predictions = await batcher.invoke_many([[1.0] * NUM_FEATURES])
+            finally:
+                await batcher.close()
+
+            self.assertEqual(2, client.calls)
+            self.assertEqual(-1, predictions[0]["prediction"])
+
+        asyncio.run(scenario())
+
+    def test_prediction_batcher_does_not_fail_when_event_is_rejected(self) -> None:
+        async def scenario() -> None:
+            publisher = _CapturingPredictionEventPublisher(accepted=False)
+            batcher = _prediction_batcher(_FakeModelGatewayClient(), publisher)
+            context = PredictionEventContext(
+                prediction_id="prediction-001",
+                request_id="request-001",
+                sample_id="secom-0000001",
+                serving_snapshot_id="state:secom-0000001:1000:3",
+                snapshot_version=3,
+                feature_hash=FEATURE_HASH,
+                missing_count=1,
+            )
+            batcher.start()
+
+            try:
+                prediction = await batcher.invoke(
+                    [0.0] * NUM_FEATURES,
+                    event_context=context,
+                )
+            finally:
+                await batcher.close()
+
+            self.assertEqual(-1, prediction["prediction"])
+            self.assertEqual(1, len(publisher.events))
+
+        asyncio.run(scenario())
+
+    def test_prediction_batcher_does_not_fail_when_publisher_raises(self) -> None:
+        async def scenario() -> None:
+            batcher = _prediction_batcher(
+                _FakeModelGatewayClient(),
+                _FailingPredictionEventPublisher(),
+            )
+            context = PredictionEventContext(
+                prediction_id="prediction-001",
+                request_id="request-001",
+                sample_id="secom-0000001",
+                serving_snapshot_id="state:secom-0000001:1000:3",
+                snapshot_version=3,
+                feature_hash=FEATURE_HASH,
+                missing_count=1,
+            )
+            batcher.start()
+
+            try:
+                with self.assertLogs(
+                    "secom_mlops.serving.api.batch",
+                    level="ERROR",
+                ):
+                    prediction = await batcher.invoke(
+                        [0.0] * NUM_FEATURES,
+                        event_context=context,
+                    )
+            finally:
+                await batcher.close()
+
+            self.assertEqual(-1, prediction["prediction"])
+
+        asyncio.run(scenario())
+
     def test_predict_returns_inference_without_publishing_event(self) -> None:
         features = [float(index) for index in range(NUM_FEATURES)]
-        batcher = _FakeModelGatewayBatcher()
+        service = _FakePredictionService()
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-            model_gateway_batcher=batcher,
-            prediction_event_producer=_FailingPredictionEventProducer(),
+            prediction_service=service,
         )))
 
         response = asyncio.run(predict(
@@ -86,17 +274,16 @@ class ServingPredictionEventTest(unittest.TestCase):
 
         self.assertEqual("secom-0000001", response["predictions"][0]["sample_id"])
         self.assertEqual(-1, response["predictions"][0]["prediction"])
-        self.assertEqual([[features]], batcher.inputs)
+        self.assertEqual([[features]], service.inputs)
+        self.assertEqual([None], service.event_contexts)
 
-    def test_predict_by_id_publishes_loaded_snapshot_reference(self) -> None:
+    def test_predict_by_id_submits_loaded_snapshot_context(self) -> None:
         snapshot = _complete_snapshot()
         snapshot_store = _FakeOnlineSnapshotStore(snapshot)
-        batcher = _FakeModelGatewayBatcher()
-        producer = _CapturingPredictionEventProducer()
+        service = _FakePredictionService()
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
             online_snapshot_store=snapshot_store,
-            model_gateway_batcher=batcher,
-            prediction_event_producer=producer,
+            prediction_service=service,
         )))
 
         response = asyncio.run(predict_by_id(
@@ -105,19 +292,18 @@ class ServingPredictionEventTest(unittest.TestCase):
         ))
 
         self.assertEqual([snapshot.sample_id], snapshot_store.loaded_sample_ids)
-        self.assertEqual([[snapshot.values]], batcher.inputs)
+        self.assertEqual([[snapshot.values]], service.inputs)
         self.assertEqual(snapshot.serving_snapshot_id, response["serving_snapshot_id"])
         self.assertEqual(snapshot.snapshot_version, response["snapshot_version"])
         self.assertEqual(snapshot.feature_hash, response["feature_hash"])
-        self.assertEqual(1, len(producer.batches))
-        self.assertEqual(1, len(producer.batches[0]))
-
-        event = producer.batches[0][0]
-        self.assertEqual(snapshot.serving_snapshot_id, event["serving_snapshot_id"])
-        self.assertEqual(snapshot.snapshot_version, event["snapshot_version"])
-        self.assertEqual(snapshot.feature_hash, event["feature_hash"])
-        self.assertNotIn("features", event)
-        self.assertEqual(snapshot.missing_count, event["missing_count"])
+        self.assertEqual(1, len(service.event_contexts))
+        context = service.event_contexts[0]
+        self.assertIsNotNone(context)
+        self.assertEqual(snapshot.sample_id, context.sample_id)
+        self.assertEqual(snapshot.serving_snapshot_id, context.serving_snapshot_id)
+        self.assertEqual(snapshot.snapshot_version, context.snapshot_version)
+        self.assertEqual(snapshot.feature_hash, context.feature_hash)
+        self.assertEqual(snapshot.missing_count, context.missing_count)
 
 
 def _complete_snapshot() -> OnlineFeatureSnapshot:
@@ -136,6 +322,18 @@ def _complete_snapshot() -> OnlineFeatureSnapshot:
         missing_count=1,
         is_complete=True,
         features_json=features,
+    )
+
+
+def _prediction_batcher(client, publisher) -> PredictionBatcher:
+    return PredictionBatcher(
+        client=client,
+        event_publisher=publisher,
+        max_batch_size=16,
+        max_wait_seconds=0,
+        queue_max_size=1024,
+        queue_timeout_seconds=2.0,
+        response_timeout_seconds=30.0,
     )
 
 

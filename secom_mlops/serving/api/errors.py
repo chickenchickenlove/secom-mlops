@@ -1,0 +1,2 @@
+class ModelGatewayError(Exception):
+    pass

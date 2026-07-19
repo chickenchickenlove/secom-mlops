@@ -1,7 +1,7 @@
 import threading
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,10 +12,17 @@ import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from mlflow.tracking import MlflowClient
-from pydantic import BaseModel, Field
 
 from secom_mlops.monitor.deployments import (
     insert_runtime_deployment_state_if_missing,
+)
+from secom_mlops.serving.runtime.model import (
+    ModelRuntime,
+)
+from secom_mlops.serving.runtime.schemas import (
+    InvocationRequest,
+    ThresholdReloadRequest,
+    ModelVersionReloadRequest,
 )
 from secom_mlops_common.config.mlflow import (
     ENV_ML_MODEL_URI,
@@ -29,52 +36,15 @@ from secom_mlops_common.config.mlflow import (
 from secom_mlops_common.logging import configure_logging, get_logger
 from secom_mlops_common.schemas.secom import MODEL_COLUMNS, NUM_FEATURES
 
-
 logger = get_logger(__name__)
 
 
-class InvocationRequest(BaseModel):
-    inputs: list[list[float | None]] = Field(..., min_length=1)
-
-
-class ThresholdReloadRequest(BaseModel):
-    threshold: float = Field(..., ge=0.0, le=1.0)
-    request_id: str | None = None
-    expected_model_name: str | None = None
-    expected_model_version: str | None = None
-    expected_run_id: str | None = None
-
-
-class ModelVersionReloadRequest(BaseModel):
-    model_version: str
-    model_name: str | None = None
-    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    request_id: str | None = None
-    expected_run_id: str | None = None
-    expected_current_model_version: str | None = None
-    expected_current_run_id: str | None = None
-
-
-@dataclass(frozen=True)
-class ModelRuntime:
-    model: mlflow.pyfunc.PyFuncModel
-    model_uri: str
-    model_name: str
-    model_version: str | None
-    model_alias: str | None
-    model_run_id: str | None
-    threshold: float | None
-    runtime_slot: str
-    loaded_at_utc: str
-    reload_request_id: str | None
-
-
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fast_api_app: FastAPI):
     configure_logging()
-    app.state.runtime_lock = threading.RLock()
-    app.state.runtime = load_runtime()
-    seed_runtime_deployment_state_if_missing(app.state.runtime)
+    fast_api_app.state.runtime_lock = threading.RLock()
+    fast_api_app.state.runtime = load_runtime()
+    seed_runtime_deployment_state_if_missing(fast_api_app.state.runtime)
     yield
 
 

@@ -1,56 +1,55 @@
 import unittest
-from unittest.mock import patch
+from pathlib import Path
 
-from scripts.monitoring.compare_candidate_with_champion_serving import (
-    DECISION_SELECTION,
-    DEFAULT_MAX_DECISIONS,
-    parse_args,
-    validate_args,
-)
+from secom_mlops.datasets.serving_gate_dataset import DECISION_SELECTION
 
 
 class CandidateServingGateContractTest(unittest.TestCase):
 
-    def parse(self, *extra_args: str):
-        argv = [
-            "compare_candidate_with_champion_serving.py",
-            "--cohort-start-time",
-            "1",
-            "--cutoff-time",
-            "10",
-            "--label-maturity-seconds",
-            "0",
-            *extra_args,
-        ]
-        with patch("sys.argv", argv):
-            return parse_args()
+    def test_gate_uses_persisted_dataset_instead_of_querying_predictions(self) -> None:
+        source = Path(
+            "scripts/monitoring/compare_candidate_with_champion_serving.py"
+        ).read_text(encoding="utf-8")
 
-    def test_gate_defaults_to_latest_one_thousand_decisions(self) -> None:
-        args = self.parse()
+        self.assertIn("load_serving_gate_dataset", source)
+        self.assertIn("log_evaluation_run", source)
+        self.assertIn("set_candidate_evaluation_pointer", source)
+        self.assertIn("evaluation_run_id=", source)
+        self.assertNotIn("FROM prediction_logs", source)
+        self.assertNotIn("max_decisions", source)
 
-        self.assertEqual(1000, DEFAULT_MAX_DECISIONS)
-        self.assertEqual(1000, args.max_decisions)
-        self.assertEqual("latest_champion_decisions", DECISION_SELECTION)
-
-    def test_legacy_limit_alias_sets_max_decisions(self) -> None:
-        args = self.parse("--limit", "700")
-
-        self.assertEqual(700, args.max_decisions)
-
-    def test_min_decisions_cannot_exceed_max_decisions(self) -> None:
-        args = self.parse(
-            "--max-decisions",
-            "400",
-            "--min-decisions",
-            "500",
+    def test_gate_selector_is_first_release_decision_per_sample_snapshot(self) -> None:
+        self.assertEqual(
+            "first_release_decision_per_sample_snapshot",
+            DECISION_SELECTION,
         )
 
-        with self.assertRaisesRegex(
-                ValueError,
-                "min_decisions must be <= max_decisions",
-        ):
-            validate_args(args)
+    def test_gate_dag_materializes_before_evaluation_and_passes_only_dataset_id(self) -> None:
+        source = Path(
+            "airflow/dags/evaluate_candidate_serving_snapshot_gate.py"
+        ).read_text(encoding="utf-8")
 
+        self.assertIn('task_id="materialize_serving_gate_dataset"', source)
+        self.assertIn('task_id="evaluate_candidate_against_champion"', source)
+        self.assertIn(
+            "materialize_serving_gate_dataset >> evaluate_candidate_against_champion",
+            source,
+        )
+        self.assertIn("ti.xcom_pull(task_ids='materialize_serving_gate_dataset')", source)
+        self.assertIn("--dataset-id", source)
+        self.assertNotIn("--max-decisions", source)
+        self.assertIn('type=["null", "string"]', source)
+        self.assertIn('"min_decisions": Param(1000', source)
+        self.assertIn('"min_labeled_decisions": Param(1000', source)
+
+    def test_deployment_request_dag_requires_an_evaluation_run_id(self) -> None:
+        source = Path(
+            "airflow/dags/record_serving_candidate_deployment_request.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"evaluation_run_id": Param(', source)
+        self.assertIn("--evaluation-run-id", source)
+        self.assertIn("evaluation_run_id_required", source)
 
 if __name__ == "__main__":
     unittest.main()

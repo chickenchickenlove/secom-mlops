@@ -29,6 +29,8 @@ class PredictionEventProducer:
         delivery_errors: list[str] = []
 
         def callback(error, message) -> None:
+            # This should be lighten.
+            # Consider warning logging level.
             if error is not None:
                 delivery_errors.append(
                     f"topic={message.topic()} partition={message.partition()} "
@@ -53,9 +55,11 @@ class PredictionEventProducer:
 
             self._producer.poll(0)
 
+        # TODO: remove this logic.
         remaining = self._producer.flush(self._flush_timeout_seconds)
         if remaining > 0:
             raise RuntimeError(f"prediction_event_flush_timeout remaining_messages={remaining}")
+        # TODO: remove this logic
         if delivery_errors:
             raise RuntimeError("prediction_event_delivery_failed " + "; ".join(delivery_errors))
 

@@ -364,7 +364,7 @@
         MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
       command:
         - uvicorn
-        - secom_mlops.serving.model_server:app
+        - secom_mlops.serving.runtime.app:app
         - --host
         - 0.0.0.0
         - --port
@@ -394,7 +394,7 @@
         MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
       command:
         - uvicorn
-        - secom_mlops.serving.model_server:app
+        - secom_mlops.serving.runtime.app:app
         - --host
         - 0.0.0.0
         - --port
@@ -424,7 +424,7 @@
         MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
       command:
         - uvicorn
-        - secom_mlops.serving.model_server:app
+        - secom_mlops.serving.runtime.app:app
         - --host
         - 0.0.0.0
         - --port
@@ -482,10 +482,13 @@
         MODEL_BATCH_QUEUE_TIMEOUT_MS: "2000"
         MODEL_BATCH_RESPONSE_TIMEOUT_SECONDS: "30"
         MODEL_BATCH_QUEUE_MAX_SIZE: "1024"
+        PREDICTION_EVENT_QUEUE_MAX_SIZE: "4096"
+        PREDICTION_EVENT_BATCH_MAX_SIZE: "100"
+        PREDICTION_EVENT_BATCH_MAX_WAIT_MS: "100"
         PREDICT_PARTIAL_RETRY_AFTER_MS: "200"
       command:
         - uvicorn
-        - secom_mlops.serving.api:app
+        - secom_mlops.serving.api.app:app
         - --host
         - 0.0.0.0
         - --port
