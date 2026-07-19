@@ -477,6 +477,8 @@
         VALKEY_HOST: valkey
         VALKEY_PORT: "6379"
         MODEL_GATEWAY_URL: http://model-gateway:8080
+        PRIMARY_BATCH_PATH: /invocations
+        SHADOW_BATCH_PATH: /shadow/invocations
         MODEL_BATCH_MAX_SIZE: "16"
         MODEL_BATCH_MAX_WAIT_MS: "20"
         MODEL_BATCH_QUEUE_TIMEOUT_MS: "2000"

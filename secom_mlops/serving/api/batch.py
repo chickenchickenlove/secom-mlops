@@ -2,14 +2,11 @@ import asyncio
 import logging
 import time
 
+from functools import partial
 from typing import Any
 from contextlib import suppress
 
 from secom_mlops.serving.api.utils import normalize_prediction, build_prediction_event
-
-logger = logging.getLogger(__name__)
-
-
 from secom_mlops.serving.api.errors import (
     ModelGatewayError,
 )
@@ -22,7 +19,7 @@ from secom_mlops.serving.api.model import (
 )
 from secom_mlops.serving.api.prediction_event_publisher import PredictionEventPublisher
 
-
+logger = logging.getLogger(__name__)
 
 class PredictionBatcher:
     def __init__(
@@ -79,6 +76,50 @@ class PredictionBatcher:
             if not pending.future.done():
                 pending.future.set_exception(ModelGatewayError("model batcher closed"))
             self._queue.task_done()
+
+    def submit_nowait(self, features: list[float | None], *, event_context: PredictionEventContext) -> bool:
+        if not self._running:
+            # Shadow path should not affects.
+            logger.warning(
+                "model_batcher_not_running prediction_id=%s",
+                event_context.prediction_id,
+            )
+            return False
+
+        pending = self._new_pending(features, event_context)
+
+        try:
+            self._queue.put_nowait(pending)
+        except asyncio.QueueFull:
+            pending.future.cancel()
+            logger.warning(
+                "model_batch_queue_full prediction_id=%s",
+                event_context.prediction_id,
+            )
+            return False
+
+        callback = partial(
+            self._consume_background_result,
+            prediction_id=event_context.prediction_id,
+        )
+        pending.future.add_done_callback(callback)
+        return True
+
+    @staticmethod
+    def _consume_background_result(future: asyncio.Future[dict[str, Any]], *, prediction_id: str) -> None:
+        # To prevent async canceled warning logs.
+        if future.cancelled():
+            return
+
+        error = future.exception()
+        if error is not None:
+            logger.warning(
+                "background_model_invocation_failed "
+                "prediction_id=%s error=%s",
+                prediction_id,
+                error,
+            )
+
 
     async def invoke(self, features: list[float | None], *, event_context: PredictionEventContext) -> dict[str, Any]:
         if not self._running:
