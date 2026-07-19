@@ -357,9 +357,10 @@
         model-trainer:
           condition: service_completed_successfully
       environment:
-        ML_URL: http://mlflow:5100
+        MLFLOW_TRACKING_URI: http://mlflow:5100
         ML_MODEL_NAME: secom-fail-detector
         ML_MODEL_ALIAS: champion
+        ML_MODEL_URI: "models:/secom-fail-detector@champion"
         MODEL_RUNTIME_SLOT: release
         MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
       command:
@@ -387,9 +388,10 @@
         model-trainer:
           condition: service_completed_successfully
       environment:
-        ML_URL: http://mlflow:5100
+        MLFLOW_TRACKING_URI: http://mlflow:5100
         ML_MODEL_NAME: secom-fail-detector
         ML_MODEL_ALIAS: champion
+        ML_MODEL_URI: "models:/secom-fail-detector@champion"
         MODEL_RUNTIME_SLOT: canary
         MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
       command:
@@ -417,9 +419,10 @@
         model-trainer:
           condition: service_completed_successfully
       environment:
-        ML_URL: http://mlflow:5100
+        MLFLOW_TRACKING_URI: http://mlflow:5100
         ML_MODEL_NAME: secom-fail-detector
         ML_MODEL_ALIAS: champion
+        ML_MODEL_URI: "models:/secom-fail-detector@champion"
         MODEL_RUNTIME_SLOT: shadow
         MONITORING_DATABASE_URL: postgresql://mlops:mlops@postgres:5432/monitoring
       command:
@@ -474,11 +477,18 @@
       environment:
         KAFKA_BOOTSTRAP_SERVERS: kafka:29092
         PREDICTION_EVENTS_TOPIC: secom-prediction-events
+        PREDICTION_EVENT_CLIENT_ID: serving-api-prediction-event-producer
+        PREDICTION_EVENT_FLUSH_TIMEOUT_SECONDS: "10"
+        VALKEY_URL: valkey://valkey:6379/0
         VALKEY_HOST: valkey
         VALKEY_PORT: "6379"
+        VALKEY_DATABASE: "0"
+        VALKEY_TIMEOUT_SECONDS: "2"
+        VALKEY_KEY_PREFIX: online_feature_snapshot
         MODEL_GATEWAY_URL: http://model-gateway:8080
         PRIMARY_BATCH_PATH: /invocations
         SHADOW_BATCH_PATH: /shadow/invocations
+        MODEL_GATEWAY_TIMEOUT_SECONDS: "10"
         MODEL_BATCH_MAX_SIZE: "16"
         MODEL_BATCH_MAX_WAIT_MS: "20"
         MODEL_BATCH_QUEUE_TIMEOUT_MS: "2000"

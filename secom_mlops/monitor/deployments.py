@@ -726,6 +726,7 @@ def upsert_runtime_deployment_state(
 
 
 def insert_runtime_deployment_state_if_missing(
+        database_url: str,
         *,
         model_name: str,
         runtime_slot: str,
@@ -744,7 +745,7 @@ def insert_runtime_deployment_state_if_missing(
 ) -> dict[str, Any] | None:
     timestamp = time.time() if now is None else now
 
-    with connect() as conn:
+    with connect(database_url) as conn:
         with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 INSERT_RUNTIME_DEPLOYMENT_STATE_IF_MISSING_SQL,

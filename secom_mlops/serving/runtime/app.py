@@ -16,6 +16,7 @@ from mlflow.tracking import MlflowClient
 from secom_mlops.monitor.deployments import (
     insert_runtime_deployment_state_if_missing,
 )
+from secom_mlops.serving.runtime.config import ModelRuntimeConfig
 from secom_mlops.serving.runtime.model import (
     ModelRuntime,
 )
@@ -23,15 +24,6 @@ from secom_mlops.serving.runtime.schemas import (
     InvocationRequest,
     ThresholdReloadRequest,
     ModelVersionReloadRequest,
-)
-from secom_mlops_common.config.mlflow import (
-    ENV_ML_MODEL_URI,
-    ENV_ML_MODEL_VERSION,
-    get_env_value,
-    resolve_model_alias,
-    resolve_model_name,
-    resolve_runtime_slot,
-    resolve_tracking_uri,
 )
 from secom_mlops_common.logging import configure_logging, get_logger
 from secom_mlops_common.schemas.secom import MODEL_COLUMNS, NUM_FEATURES
@@ -42,9 +34,14 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(fast_api_app: FastAPI):
     configure_logging()
+    config = ModelRuntimeConfig()
+    fast_api_app.state.config = config
     fast_api_app.state.runtime_lock = threading.RLock()
-    fast_api_app.state.runtime = load_runtime()
-    seed_runtime_deployment_state_if_missing(fast_api_app.state.runtime)
+    fast_api_app.state.runtime = load_runtime(config)
+    seed_runtime_deployment_state_if_missing(
+        fast_api_app.state.runtime,
+        config.monitoring_database_url,
+    )
     yield
 
 
@@ -112,6 +109,8 @@ async def reload_threshold(payload: ThresholdReloadRequest, request: Request):
 
 @app.post("/admin/reload-model-version")
 async def reload_model_version(payload: ModelVersionReloadRequest, request: Request):
+    config: ModelRuntimeConfig = request.app.state.config
+
     with request.app.state.runtime_lock:
         current_runtime: ModelRuntime = request.app.state.runtime
         _validate_current_runtime(
@@ -124,6 +123,7 @@ async def reload_model_version(payload: ModelVersionReloadRequest, request: Requ
     model_name = payload.model_name or current_runtime.model_name
 
     next_runtime = load_runtime_for_model_version(
+        config,
         model_name=model_name,
         model_version=payload.model_version,
         threshold_override=payload.threshold,
@@ -211,64 +211,73 @@ async def invocations(payload: InvocationRequest, request: Request):
     }
 
 
-def load_runtime() -> ModelRuntime:
-    mlflow_url = resolve_tracking_uri()
-    model_name = resolve_model_name()
-    model_alias = resolve_model_alias()
-    model_version = get_env_value(ENV_ML_MODEL_VERSION)
-    model_uri = get_env_value(ENV_ML_MODEL_URI)
-
-    mlflow.set_tracking_uri(mlflow_url)
+def load_runtime(config: ModelRuntimeConfig) -> ModelRuntime:
+    mlflow.set_tracking_uri(config.mlflow_tracking_uri)
     client = MlflowClient()
 
     resolved_alias = None
     resolved_version = None
     resolved_run_id = None
 
-    if model_uri:
-        resolved_model_uri = model_uri
-        if model_version:
-            version = client.get_model_version(model_name, model_version)
+    if config.ml_model_uri:
+        resolved_model_uri = config.ml_model_uri
+        if config.ml_model_version:
+            version = client.get_model_version(
+                config.ml_model_name,
+                config.ml_model_version,
+            )
             resolved_version = version.version
             resolved_run_id = version.run_id
-        elif model_alias:
-            version = client.get_model_version_by_alias(model_name, model_alias)
-            resolved_alias = model_alias
+        elif config.ml_model_alias:
+            version = client.get_model_version_by_alias(
+                config.ml_model_name,
+                config.ml_model_alias,
+            )
+            resolved_alias = config.ml_model_alias
             resolved_version = version.version
             resolved_run_id = version.run_id
-    elif model_version:
-        version = client.get_model_version(model_name, model_version)
-        resolved_model_uri = f"models:/{model_name}/{version.version}"
+    elif config.ml_model_version:
+        version = client.get_model_version(
+            config.ml_model_name,
+            config.ml_model_version,
+        )
+        resolved_model_uri = f"models:/{config.ml_model_name}/{version.version}"
         resolved_version = version.version
         resolved_run_id = version.run_id
     else:
-        version = client.get_model_version_by_alias(model_name, model_alias)
-        resolved_model_uri = f"models:/{model_name}@{model_alias}"
-        resolved_alias = model_alias
+        version = client.get_model_version_by_alias(
+            config.ml_model_name,
+            config.ml_model_alias,
+        )
+        resolved_model_uri = (
+            f"models:/{config.ml_model_name}@{config.ml_model_alias}"
+        )
+        resolved_alias = config.ml_model_alias
         resolved_version = version.version
         resolved_run_id = version.run_id
 
     threshold = _load_threshold(client, resolved_run_id)
     return _load_runtime_from_uri(
         model_uri=resolved_model_uri,
-        model_name=model_name,
+        model_name=config.ml_model_name,
         model_version=resolved_version,
         model_alias=resolved_alias,
         model_run_id=resolved_run_id,
         threshold=threshold,
+        runtime_slot=config.model_runtime_slot,
         reload_request_id=None,
     )
 
 
 def load_runtime_for_model_version(
+        config: ModelRuntimeConfig,
         model_name: str,
         model_version: str,
         threshold_override: float | None,
         expected_run_id: str | None,
         reload_request_id: str | None,
 ) -> ModelRuntime:
-    mlflow_url = resolve_tracking_uri()
-    mlflow.set_tracking_uri(mlflow_url)
+    mlflow.set_tracking_uri(config.mlflow_tracking_uri)
     client = MlflowClient()
 
     version = client.get_model_version(model_name, model_version)
@@ -300,11 +309,15 @@ def load_runtime_for_model_version(
         model_alias=None,
         model_run_id=resolved_run_id,
         threshold=threshold,
+        runtime_slot=config.model_runtime_slot,
         reload_request_id=reload_request_id,
     )
 
 
-def seed_runtime_deployment_state_if_missing(runtime: ModelRuntime) -> None:
+def seed_runtime_deployment_state_if_missing(
+        runtime: ModelRuntime,
+        database_url: str,
+) -> None:
     if (
         runtime.model_version is None
         or runtime.model_run_id is None
@@ -328,6 +341,7 @@ def seed_runtime_deployment_state_if_missing(runtime: ModelRuntime) -> None:
 
     try:
         runtime_state = insert_runtime_deployment_state_if_missing(
+            database_url,
             model_name=runtime.model_name,
             runtime_slot=runtime.runtime_slot,
             target_alias=runtime.model_alias or "champion",
@@ -394,6 +408,7 @@ def _load_runtime_from_uri(
         model_alias: str | None,
         model_run_id: str | None,
         threshold: float | None,
+        runtime_slot: str,
         reload_request_id: str | None,
 ) -> ModelRuntime:
     model = mlflow.pyfunc.load_model(model_uri)
@@ -405,7 +420,7 @@ def _load_runtime_from_uri(
         model_alias=model_alias,
         model_run_id=model_run_id,
         threshold=threshold,
-        runtime_slot=resolve_runtime_slot(),
+        runtime_slot=runtime_slot,
         loaded_at_utc=_utc_now(),
         reload_request_id=reload_request_id,
     )

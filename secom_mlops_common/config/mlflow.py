@@ -7,21 +7,17 @@ ENV_MLFLOW_TRACKING_URI = "MLFLOW_TRACKING_URI"
 ENV_ML_URL = "ML_URL"
 ENV_ML_MODEL_NAME = "ML_MODEL_NAME"
 ENV_ML_MODEL_ALIAS = "ML_MODEL_ALIAS"
-ENV_ML_MODEL_VERSION = "ML_MODEL_VERSION"
-ENV_ML_MODEL_URI = "ML_MODEL_URI"
 ENV_ML_RUN_ID = "ML_RUN_ID"
 ENV_ML_TARGET_MODEL_ALIAS = "ML_TARGET_MODEL_ALIAS"
 ENV_ML_MODEL_ROLE = "ML_MODEL_ROLE"
 ENV_ML_CANDIDATE_GROUP = "ML_CANDIDATE_GROUP"
 ENV_ML_TRAINING_JOB_ID = "ML_TRAINING_JOB_ID"
-ENV_MODEL_RUNTIME_SLOT = "MODEL_RUNTIME_SLOT"
 
 DEFAULT_LOCAL_MLFLOW_TRACKING_URI = "http://localhost:5100"
 DEFAULT_CONTAINER_MLFLOW_TRACKING_URI = "http://mlflow:5100"
 DEFAULT_MODEL_NAME = "secom-fail-detector"
 DEFAULT_CHAMPION_ALIAS = "champion"
 DEFAULT_CANDIDATE_ALIAS = "candidate"
-DEFAULT_MODEL_RUNTIME_SLOT = "release"
 
 MODEL_ROLE_CANDIDATE = "candidate"
 MODEL_ROLE_CHAMPION = "champion"
@@ -73,16 +69,6 @@ def resolve_model_role(argument_value: str | None = None,
                        ) -> str:
     env = os.environ if environ is None else environ
     return _first_non_empty(argument_value, env.get(ENV_ML_MODEL_ROLE), default)
-
-
-def resolve_runtime_slot(
-        argument_value: str | None = None,
-        *,
-        default: str = DEFAULT_MODEL_RUNTIME_SLOT,
-        environ: Mapping[str, str] | None = None,
-) -> str:
-    env = os.environ if environ is None else environ
-    return _first_non_empty(argument_value, env.get(ENV_MODEL_RUNTIME_SLOT), default)
 
 
 def get_env_value(
