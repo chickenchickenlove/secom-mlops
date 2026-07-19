@@ -4,23 +4,22 @@ from typing import Any
 
 from confluent_kafka import Producer
 
-from secom_mlops_common.config.kafka import (
-    resolve_kafka_bootstrap_servers,
-    resolve_prediction_event_client_id,
-    resolve_prediction_event_flush_timeout_seconds,
-    resolve_prediction_events_topic,
-)
-
 logger = logging.getLogger(__name__)
 
+
 class PredictionEventProducer:
-    def __init__(self) -> None:
-        bootstrap_servers = resolve_kafka_bootstrap_servers()
-        self._topic = resolve_prediction_events_topic()
-        self._flush_timeout_seconds = resolve_prediction_event_flush_timeout_seconds()
+    def __init__(
+        self,
+        bootstrap_servers: str,
+        topic: str,
+        client_id: str,
+        flush_timeout_seconds: float,
+    ) -> None:
+        self._topic = topic
+        self._flush_timeout_seconds = flush_timeout_seconds
         self._producer = Producer({
             "bootstrap.servers": bootstrap_servers,
-            "client.id": resolve_prediction_event_client_id(),
+            "client.id": client_id,
             "broker.address.family": "v4",
         })
 
@@ -38,17 +37,26 @@ class PredictionEventProducer:
                     message.topic(),
                     message.partition(),
                     message.offset(),
-                    error
+                    error,
                 )
 
         for event in events:
-            value = json.dumps(event, separators=(",", ":"), allow_nan=False).encode("utf-8")
+            value = json.dumps(
+                event,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
             key = str(event["sample_id"]).encode("utf-8")
 
             try:
                 # Message will be stored in producer batch.
                 # This does not means that messages are sent to broker right now.
-                self._producer.produce(topic=self._topic, key=key, value=value, on_delivery=callback,)
+                self._producer.produce(
+                    topic=self._topic,
+                    key=key,
+                    value=value,
+                    on_delivery=callback,
+                )
             except BufferError:
                 logger.warning(
                     "prediction_event_local_queue_full "
@@ -60,7 +68,6 @@ class PredictionEventProducer:
                 continue
 
             self._producer.poll(0)
-
 
     def close(self) -> None:
         remaining = self._producer.flush(self._flush_timeout_seconds)

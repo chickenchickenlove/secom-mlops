@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import math
-import os
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -16,12 +15,14 @@ from secom_mlops.feature_store.online_snapshot_reader import (
     OnlineFeatureSnapshotStore,
 )
 from secom_mlops.monitor.prediction_events import PredictionEventProducer
+from secom_mlops.serving.api.batch import PredictionBatcher
+from secom_mlops.serving.api.client import ModelGatewayClient
+from secom_mlops.serving.api.config import ServingApiConfig
+from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.model import PredictionEventContext
 from secom_mlops.serving.api.prediction_event_publisher import (
     BufferedPredictionEventPublisher,
 )
-from secom_mlops.serving.api.utils import normalize_prediction
-from secom_mlops.serving.api.client import ModelGatewayClient
-from secom_mlops.serving.api.batch import PredictionBatcher
 from secom_mlops.serving.api.prediction_service import (
     PredictionService,
 )
@@ -31,63 +32,69 @@ from secom_mlops.serving.api.schemas import (
     PredictByIdResponse,
     PredictByIdRequest,
 )
-from secom_mlops.serving.api.model import PredictionEventContext
-from secom_mlops.serving.api.errors import ModelGatewayError
-from secom_mlops_common.config.serving import (
-    ENV_MODEL_GATEWAY_TIMEOUT_SECONDS,
-    resolve_model_gateway_url,
-)
+from secom_mlops.serving.api.utils import normalize_prediction
 
 logger = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(fast_api_app: FastAPI):
-    fast_api_app.state.prediction_event_producer = PredictionEventProducer()
+    config = ServingApiConfig()
+    fast_api_app.state.config = config
+    fast_api_app.state.prediction_event_producer = PredictionEventProducer(
+        bootstrap_servers=config.kafka_bootstrap_servers,
+        topic=config.prediction_events_topic,
+        client_id=config.prediction_event_client_id,
+        flush_timeout_seconds=config.prediction_event_flush_timeout_seconds,
+    )
     fast_api_app.state.prediction_event_publisher = BufferedPredictionEventPublisher(
         fast_api_app.state.prediction_event_producer,
-        queue_max_size=int(os.getenv("PREDICTION_EVENT_QUEUE_MAX_SIZE", "4096")),
-        batch_max_size=int(os.getenv("PREDICTION_EVENT_BATCH_MAX_SIZE", "100")),
-        batch_max_wait_seconds=(
-            float(os.getenv("PREDICTION_EVENT_BATCH_MAX_WAIT_MS", "100")) / 1000
-        ),
+        queue_max_size=config.prediction_event_queue_max_size,
+        batch_max_size=config.prediction_event_batch_max_size,
+        batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
     )
     fast_api_app.state.shadow_prediction_event_publisher = BufferedPredictionEventPublisher(
         fast_api_app.state.prediction_event_producer,
-        queue_max_size=int(os.getenv("PREDICTION_EVENT_QUEUE_MAX_SIZE", "4096")),
-        batch_max_size=int(os.getenv("PREDICTION_EVENT_BATCH_MAX_SIZE", "100")),
-        batch_max_wait_seconds=(
-                float(os.getenv("PREDICTION_EVENT_BATCH_MAX_WAIT_MS", "100")) / 1000
-        ),
+        queue_max_size=config.prediction_event_queue_max_size,
+        batch_max_size=config.prediction_event_batch_max_size,
+        batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
     )
-    fast_api_app.state.online_snapshot_store = OnlineFeatureSnapshotStore()
+    fast_api_app.state.online_snapshot_store = OnlineFeatureSnapshotStore(
+        valkey_url=config.valkey_url,
+        valkey_host=config.valkey_host,
+        valkey_port=config.valkey_port,
+        valkey_database=config.valkey_database,
+        timeout_seconds=config.valkey_timeout_seconds,
+        key_prefix=config.valkey_key_prefix,
+    )
     fast_api_app.state.model_gateway_client = ModelGatewayClient(
-        base_url=resolve_model_gateway_url(),
-        path=os.getenv("PRIMARY_BATCH_PATH", "/invocations"),
-        timeout_seconds=float(os.getenv(ENV_MODEL_GATEWAY_TIMEOUT_SECONDS, "10.0")),
+        base_url=config.model_gateway_url,
+        path=config.primary_batch_path,
+        timeout_seconds=config.model_gateway_timeout_seconds,
     )
     fast_api_app.state.shadow_model_gateway_client = ModelGatewayClient(
-        base_url=resolve_model_gateway_url(),
-        path=os.getenv("SHADOW_BATCH_PATH", "/shadow/invocations"),
-        timeout_seconds=float(os.getenv(ENV_MODEL_GATEWAY_TIMEOUT_SECONDS, "10.0")),
+        base_url=config.model_gateway_url,
+        path=config.shadow_batch_path,
+        timeout_seconds=config.model_gateway_timeout_seconds,
     )
 
     fast_api_app.state.primary_prediction_batcher = PredictionBatcher(
         client=fast_api_app.state.model_gateway_client,
         event_publisher=fast_api_app.state.prediction_event_publisher,
-        max_batch_size=int(os.getenv("MODEL_BATCH_MAX_SIZE", "16")),
-        max_wait_seconds=(float(os.getenv("MODEL_BATCH_MAX_WAIT_MS", "20")) / 1000),
-        queue_max_size=int(os.getenv("MODEL_BATCH_QUEUE_MAX_SIZE", "1024")),
-        queue_timeout_seconds=(float(os.getenv("MODEL_BATCH_QUEUE_TIMEOUT_MS", "2000")) / 1000),
-        response_timeout_seconds=float(os.getenv("MODEL_BATCH_RESPONSE_TIMEOUT_SECONDS", "30.0")),
+        max_batch_size=config.model_batch_max_size,
+        max_wait_seconds=config.model_batch_max_wait_seconds,
+        queue_max_size=config.model_batch_queue_max_size,
+        queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
+        response_timeout_seconds=config.model_batch_response_timeout_seconds,
     )
     fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
         client=fast_api_app.state.shadow_model_gateway_client,
         event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
-        max_batch_size=int(os.getenv("MODEL_BATCH_MAX_SIZE", "16")),
-        max_wait_seconds=(float(os.getenv("MODEL_BATCH_MAX_WAIT_MS", "20")) / 1000),
-        queue_max_size=int(os.getenv("MODEL_BATCH_QUEUE_MAX_SIZE", "1024")),
-        queue_timeout_seconds=(float(os.getenv("MODEL_BATCH_QUEUE_TIMEOUT_MS", "2000")) / 1000),
-        response_timeout_seconds=float(os.getenv("MODEL_BATCH_RESPONSE_TIMEOUT_SECONDS", "30.0")),
+        max_batch_size=config.model_batch_max_size,
+        max_wait_seconds=config.model_batch_max_wait_seconds,
+        queue_max_size=config.model_batch_queue_max_size,
+        queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
+        response_timeout_seconds=config.model_batch_response_timeout_seconds,
     )
 
     fast_api_app.state.prediction_service = PredictionService(
@@ -176,7 +183,10 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
         return _snapshot_timed_out_response(snapshot)
 
     if not snapshot.is_complete or snapshot.snapshot_status != "complete":
-        return _snapshot_not_ready_response(snapshot)
+        return _snapshot_not_ready_response(
+            snapshot,
+            request.app.state.config.predict_partial_retry_after_ms,
+        )
 
     request_id = str(uuid4())
     prediction_id = str(uuid4())
@@ -212,8 +222,7 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
     }
 
 
-def _snapshot_not_ready_response(snapshot) -> JSONResponse:
-    retry_after_ms = int(os.getenv("PREDICT_PARTIAL_RETRY_AFTER_MS", "200"))
+def _snapshot_not_ready_response(snapshot, retry_after_ms: int) -> JSONResponse:
     retry_after_seconds = max(1, math.ceil(retry_after_ms / 1000))
 
     return JSONResponse(

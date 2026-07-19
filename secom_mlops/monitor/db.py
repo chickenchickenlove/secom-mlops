@@ -10,8 +10,8 @@ def get_database_url() -> str:
 
 
 @contextmanager
-def connect():
-    conn = psycopg.connect(get_database_url())
+def connect(database_url: str | None = None):
+    conn = psycopg.connect(database_url or get_database_url())
     try:
         yield conn
         conn.commit()

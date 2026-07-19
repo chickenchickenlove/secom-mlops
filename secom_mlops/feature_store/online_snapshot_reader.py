@@ -6,14 +6,6 @@ from typing import Any
 import pandas as pd
 import valkey
 
-from secom_mlops_common.config.valkey import (
-    resolve_valkey_database,
-    resolve_valkey_host,
-    resolve_valkey_key_prefix,
-    resolve_valkey_port,
-    resolve_valkey_timeout_seconds,
-    resolve_valkey_url,
-)
 from secom_mlops_common.schemas.secom import FEATURE_KEYS, NUM_FEATURES, normalize_feature_value
 
 
@@ -48,12 +40,22 @@ class OnlineFeatureSnapshot:
 
 class OnlineFeatureSnapshotStore:
     def __init__(
-            self,
-            client: valkey.Valkey | None = None,
-            key_prefix: str | None = None,
+        self,
+        valkey_url: str | None,
+        valkey_host: str,
+        valkey_port: int,
+        valkey_database: int,
+        timeout_seconds: float,
+        key_prefix: str,
     ) -> None:
-        self._client = client or _build_default_client()
-        self._key_prefix = key_prefix or resolve_valkey_key_prefix()
+        self._client = _build_client(
+            valkey_url=valkey_url,
+            valkey_host=valkey_host,
+            valkey_port=valkey_port,
+            valkey_database=valkey_database,
+            timeout_seconds=timeout_seconds,
+        )
+        self._key_prefix = key_prefix
 
     def load(self, sample_id: str) -> OnlineFeatureSnapshot:
         raw = self._client.get(f"{self._key_prefix}:{sample_id}")
@@ -80,25 +82,28 @@ def online_snapshot_to_dataframe(snapshot: OnlineFeatureSnapshot) -> pd.DataFram
     )
 
 
-def _build_default_client() -> valkey.Valkey:
-    timeout = resolve_valkey_timeout_seconds()
-
-    valkey_url = resolve_valkey_url()
+def _build_client(
+    valkey_url: str | None,
+    valkey_host: str,
+    valkey_port: int,
+    valkey_database: int,
+    timeout_seconds: float,
+) -> valkey.Valkey:
     if valkey_url:
         return valkey.Valkey.from_url(
             valkey_url,
             decode_responses=True,
-            socket_timeout=timeout,
-            socket_connect_timeout=timeout,
+            socket_timeout=timeout_seconds,
+            socket_connect_timeout=timeout_seconds,
         )
 
     return valkey.Valkey(
-        host=resolve_valkey_host(),
-        port=resolve_valkey_port(),
-        db=resolve_valkey_database(),
+        host=valkey_host,
+        port=valkey_port,
+        db=valkey_database,
         decode_responses=True,
-        socket_timeout=timeout,
-        socket_connect_timeout=timeout,
+        socket_timeout=timeout_seconds,
+        socket_connect_timeout=timeout_seconds,
     )
 
 

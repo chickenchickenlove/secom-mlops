@@ -1,8 +1,10 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from secom_mlops.feature_store.online_snapshot_reader import (
     InvalidOnlineFeatureSnapshot,
+    OnlineFeatureSnapshotStore,
     _parse_snapshot,
 )
 
@@ -10,6 +12,54 @@ FEATURE_HASH = "sha256:v1:" + "0" * 64
 
 
 class OnlineSnapshotReaderTest(unittest.TestCase):
+    def test_builds_client_from_explicit_host_config(self) -> None:
+        with patch(
+            "secom_mlops.feature_store.online_snapshot_reader.valkey.Valkey"
+        ) as valkey_type:
+            store = OnlineFeatureSnapshotStore(
+                valkey_url=None,
+                valkey_host="valkey",
+                valkey_port=6380,
+                valkey_database=2,
+                timeout_seconds=3.5,
+                key_prefix="snapshots",
+            )
+
+        valkey_type.assert_called_once_with(
+            host="valkey",
+            port=6380,
+            db=2,
+            decode_responses=True,
+            socket_timeout=3.5,
+            socket_connect_timeout=3.5,
+        )
+
+        store.close()
+        valkey_type.return_value.close.assert_called_once_with()
+
+    def test_builds_client_from_explicit_url_config(self) -> None:
+        with patch(
+            "secom_mlops.feature_store.online_snapshot_reader.valkey.Valkey"
+        ) as valkey_type:
+            store = OnlineFeatureSnapshotStore(
+                valkey_url="valkey://valkey:6379/3",
+                valkey_host="ignored",
+                valkey_port=1,
+                valkey_database=0,
+                timeout_seconds=1.5,
+                key_prefix="snapshots",
+            )
+
+        valkey_type.from_url.assert_called_once_with(
+            "valkey://valkey:6379/3",
+            decode_responses=True,
+            socket_timeout=1.5,
+            socket_connect_timeout=1.5,
+        )
+
+        store.close()
+        valkey_type.from_url.return_value.close.assert_called_once_with()
+
     def test_parses_matching_positive_snapshot_version(self) -> None:
         snapshot = _parse_snapshot(
             json.dumps(_valid_payload()),

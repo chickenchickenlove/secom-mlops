@@ -17,6 +17,7 @@ dependencies = [
     "confluent-kafka>=2.5,<3",
     "valkey>=6.1,<7",
     "httpx>=0.28,<1",
+    "pydantic-settings>=2.10,<3",
     "apache-airflow==2.10.5",
 ]
 
