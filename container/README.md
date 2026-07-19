@@ -6,10 +6,10 @@ This stack runs the local SECOM/FDC online path, offline/raw store sync, model s
 
 - PostgreSQL stores `feature_events`, `serving_feature_snapshots`, append-only `label_events`, `prediction_logs`, offline data, and monitoring metrics.
 - Kafka carries feature patch, feature state update, label event, and prediction event topics.
-- Prometheus scrapes Kafka broker JMX metrics exposed by the JMX exporter.
+- Prometheus scrapes Kafka metrics and Serving API prediction dispatch metrics.
 - Valkey stores the latest online feature snapshot per `sample_id`.
 - MLflow stores experiments, model registry metadata, and model artifacts.
-- Grafana reads PostgreSQL through the provisioned `Monitoring Postgres` datasource and Kafka broker metrics through the `Prometheus` datasource.
+- Grafana reads PostgreSQL through the provisioned `Monitoring Postgres` datasource and operational metrics through the `Prometheus` datasource.
 - Java daemons materialize Kafka streams into PostgreSQL and Valkey.
 - Python scripts generate workload events, prediction requests, and monitoring metrics.
 
@@ -143,6 +143,19 @@ Useful starter PromQL queries for consumer lag:
 sum by (consumergroup, topic) (kafka_consumergroup_lag)
 max by (consumergroup, topic) (kafka_consumergroup_lag)
 sum by (consumergroup) (kafka_consumergroup_lag)
+```
+
+The Serving API exposes Prometheus metrics at `/metrics`. The dispatch counter
+is increased by the number of operational `/predict-by-id` rows immediately
+before each model gateway call. Debug `/predict` traffic is excluded.
+`destination="release"` represents the primary `/invocations` route and
+therefore includes traffic that the gateway may route to Canary.
+`destination="shadow"` represents `/shadow/invocations`.
+
+```promql
+sum by (destination) (
+  rate(secom_serving_prediction_dispatch_total{destination=~"release|shadow"}[1m])
+)
 ```
 
 ## Services

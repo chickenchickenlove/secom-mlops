@@ -8,6 +8,7 @@ from secom_mlops.serving.api.app import (
     predict_by_id,
 )
 from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.metrics import PredictionDestination
 from secom_mlops.serving.api.model import PredictionEventContext
 from secom_mlops.serving.api.batch import PredictionBatcher
 from secom_mlops.serving.api.schemas import (
@@ -86,6 +87,29 @@ class _FailingPredictionEventPublisher:
         raise RuntimeError(f"publisher stopped: {event['prediction_id']}")
 
 
+class _CapturingPredictionMetrics:
+    def __init__(self) -> None:
+        self.dispatches: list[tuple[PredictionDestination, int]] = []
+
+    def record_dispatch(
+        self,
+        destination: PredictionDestination,
+        prediction_count: int,
+    ) -> None:
+        self.dispatches.append((destination, prediction_count))
+
+
+class _FailingPredictionMetrics:
+    def record_dispatch(
+        self,
+        destination: PredictionDestination,
+        prediction_count: int,
+    ) -> None:
+        raise RuntimeError(
+            f"metric unavailable: {destination} {prediction_count}"
+        )
+
+
 class _FakeOnlineSnapshotStore:
     def __init__(self, snapshot: OnlineFeatureSnapshot) -> None:
         self.snapshot = snapshot
@@ -121,7 +145,12 @@ class ServingPredictionEventTest(unittest.TestCase):
         async def scenario() -> None:
             client = _FakeModelGatewayClient()
             publisher = _CapturingPredictionEventPublisher()
-            batcher = _prediction_batcher(client, publisher)
+            prediction_metrics = _CapturingPredictionMetrics()
+            batcher = _prediction_batcher(
+                client,
+                publisher,
+                prediction_metrics=prediction_metrics,
+            )
             context = PredictionEventContext(
                 prediction_id="prediction-001",
                 request_id="request-001",
@@ -152,6 +181,7 @@ class ServingPredictionEventTest(unittest.TestCase):
             self.assertEqual(context.feature_hash, event["feature_hash"])
             self.assertEqual("release", event["runtime_slot"])
             self.assertGreaterEqual(event["latency_ms"], 0)
+            self.assertEqual([("release", 1)], prediction_metrics.dispatches)
 
         asyncio.run(scenario())
 
@@ -171,6 +201,69 @@ class ServingPredictionEventTest(unittest.TestCase):
 
             self.assertEqual(2, len(predictions))
             self.assertEqual([], publisher.events)
+
+        asyncio.run(scenario())
+
+    def test_prediction_batcher_does_not_record_debug_dispatch(self) -> None:
+        async def scenario() -> None:
+            prediction_metrics = _CapturingPredictionMetrics()
+            batcher = _prediction_batcher(
+                _FakeModelGatewayClient(),
+                _CapturingPredictionEventPublisher(),
+                prediction_metrics=prediction_metrics,
+            )
+            batcher.start()
+
+            try:
+                await batcher.invoke_many([
+                    [0.0] * NUM_FEATURES,
+                    [1.0] * NUM_FEATURES,
+                ])
+            finally:
+                await batcher.close()
+
+            self.assertEqual([], prediction_metrics.dispatches)
+
+        asyncio.run(scenario())
+
+    def test_prediction_batcher_survives_metric_record_failure(self) -> None:
+        async def scenario() -> None:
+            client = _FakeModelGatewayClient()
+            batcher = _prediction_batcher(
+                client,
+                _CapturingPredictionEventPublisher(),
+                prediction_metrics=_FailingPredictionMetrics(),
+            )
+            context = PredictionEventContext(
+                prediction_id="prediction-001",
+                request_id="request-001",
+                sample_id="secom-0000001",
+                serving_snapshot_id="state:secom-0000001:1000:3",
+                snapshot_version=3,
+                feature_hash=FEATURE_HASH,
+                missing_count=1,
+            )
+            batcher.start()
+
+            try:
+                with self.assertLogs(
+                    "secom_mlops.serving.api.batch",
+                    level="ERROR",
+                ):
+                    first = await batcher.invoke(
+                        [0.0] * NUM_FEATURES,
+                        event_context=context,
+                    )
+                    second = await batcher.invoke(
+                        [1.0] * NUM_FEATURES,
+                        event_context=context,
+                    )
+            finally:
+                await batcher.close()
+
+            self.assertEqual(-1, first["prediction"])
+            self.assertEqual(-1, second["prediction"])
+            self.assertEqual(2, len(client.inputs))
 
         asyncio.run(scenario())
 
@@ -325,10 +418,17 @@ def _complete_snapshot() -> OnlineFeatureSnapshot:
     )
 
 
-def _prediction_batcher(client, publisher) -> PredictionBatcher:
+def _prediction_batcher(
+    client,
+    publisher,
+    *,
+    prediction_metrics: _CapturingPredictionMetrics | None = None,
+) -> PredictionBatcher:
     return PredictionBatcher(
         client=client,
         event_publisher=publisher,
+        prediction_metrics=prediction_metrics or _CapturingPredictionMetrics(),
+        destination="release",
         max_batch_size=16,
         max_wait_seconds=0,
         queue_max_size=1024,

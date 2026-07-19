@@ -119,8 +119,8 @@
     },
     {
       "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "monitoring-postgres"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -199,31 +199,19 @@
       "pluginVersion": "11.6.16",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "  SELECT\n    to_timestamp(floor(predicted_at / 60) * 60) AS time,\n    COUNT(*) AS prediction_count\n  FROM prediction_logs\n  WHERE predicted_at BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1\n  ORDER BY 1;",
-          "refId": "A",
-          "sql": {
-            "columns": [
-              {
-                "parameters": [],
-                "type": "function"
-              }
-            ],
-            "groupBy": [
-              {
-                "property": {
-                  "type": "string"
-                },
-                "type": "groupBy"
-              }
-            ],
-            "limit": 50
-          }
+          "expr": "sum by (destination) (\n  rate(secom_serving_prediction_dispatch_total{destination=~\"release|shadow\"}[$__rate_interval])\n)",
+          "instant": false,
+          "legendFormat": "{{destination}}",
+          "range": true,
+          "refId": "A"
         }
       ],
-      "title": "Prediction Count",
+      "title": "Prediction Dispatch Rate by Destination",
       "type": "timeseries",
       "collapsed": false
     },
