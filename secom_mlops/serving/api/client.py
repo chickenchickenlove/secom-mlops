@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class ModelGatewayClient:
-    def __init__(self, base_url: str, timeout_seconds: float) -> None:
+    def __init__(self, base_url: str, path: str, timeout_seconds: float) -> None:
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(
@@ -20,8 +20,7 @@ class ModelGatewayClient:
                 connect=min(timeout_seconds, 2.0),
             ),
         )
-        # TODO: Use argument.
-        self.path = "/invocations"
+        self.path = path
 
     async def close(self) -> None:
         await self._client.aclose()

@@ -82,7 +82,7 @@ Workload scripts
 - In-memory queue 또는 Kafka Producer의 local queue가 가득 차거나, delivery가 실패하거나, 프로세스가 비정상 종료되면 이벤트가 유실될 수 있습니다. 실패한 이벤트를 재시도하거나 복구하는 durable outbox는 현재 제공하지 않습니다.
 - 정상 종료 시에는 in-memory queue drain과 Kafka Producer flush를 시도합니다.
 - Prediction event와 `prediction_logs`에는 전체 feature vector를 중복 저장하지 않습니다. Feature consumer는 `serving_snapshot_id + sample_id + snapshot_version` logical identity와 `feature_hash` 일치를 확인한 뒤 `serving_feature_snapshots.features_json`을 읽고, 작은 scalar인 `missing_count`는 prediction log에 유지합니다.
-- 현재 Shadow로 트래픽을 전송하여, Shadow로부터 오는 예측 결과를 클라이언트에게 응답하지 않고 평가에만 반영하는 것은 미구현 상태입니다. 
+- `/predict-by-id` 요청은 Primary와 Shadow runtime으로 fan-out됩니다. 클라이언트는 Primary 결과만 응답받으며, Shadow 결과는 best-effort prediction event로 발행됩니다. Primary와 Shadow를 비교하는 평가 및 메트릭 계산은 후속 범위입니다.
 
 
 ```text
@@ -381,7 +381,7 @@ label_events
 ### Gateway 기반 release control
 Airflow는 model runtime을 직접 조작하지 않고 `model-gateway` admin API를 호출합니다. 
 Gateway는 release, canary, shadow runtime으로 traffic을 분리하고 reload를 제어합니다.
-그러나 현재 shadow는 upstream으로 등록되어있으나 shadow 평가 경로가 미구현되어, 실제 트래픽 조절은 release / canary 사이에서만 처리되고 있습니다.
+Serving API는 `/predict-by-id` 요청을 Shadow runtime으로 고정 fan-out하지만, Shadow 평가와 이를 이용한 배포 제어는 아직 구현하지 않았습니다. 비율 기반 traffic 조절은 현재 release와 canary 사이에서만 수행합니다.
 
 ### Monitoring feedback
 Prediction/label evidence에서 T/L/W 기반 live model quality와 prediction-window metric을 계산하고, snapshot evidence에서는 drift metric을 계산합니다. Live quality는 `live_model_quality_evaluations` wide row로 append되며 Grafana는 status/coverage와 metric을 함께 표시합니다.

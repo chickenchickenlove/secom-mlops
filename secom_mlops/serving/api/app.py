@@ -51,13 +51,26 @@ async def lifespan(fast_api_app: FastAPI):
             float(os.getenv("PREDICTION_EVENT_BATCH_MAX_WAIT_MS", "100")) / 1000
         ),
     )
+    fast_api_app.state.shadow_prediction_event_publisher = BufferedPredictionEventPublisher(
+        fast_api_app.state.prediction_event_producer,
+        queue_max_size=int(os.getenv("PREDICTION_EVENT_QUEUE_MAX_SIZE", "4096")),
+        batch_max_size=int(os.getenv("PREDICTION_EVENT_BATCH_MAX_SIZE", "100")),
+        batch_max_wait_seconds=(
+                float(os.getenv("PREDICTION_EVENT_BATCH_MAX_WAIT_MS", "100")) / 1000
+        ),
+    )
     fast_api_app.state.online_snapshot_store = OnlineFeatureSnapshotStore()
     fast_api_app.state.model_gateway_client = ModelGatewayClient(
         base_url=resolve_model_gateway_url(),
-        timeout_seconds=float(
-            os.getenv(ENV_MODEL_GATEWAY_TIMEOUT_SECONDS, "10.0")
-        ),
+        path=os.getenv("PRIMARY_BATCH_PATH", "/invocations"),
+        timeout_seconds=float(os.getenv(ENV_MODEL_GATEWAY_TIMEOUT_SECONDS, "10.0")),
     )
+    fast_api_app.state.shadow_model_gateway_client = ModelGatewayClient(
+        base_url=resolve_model_gateway_url(),
+        path=os.getenv("SHADOW_BATCH_PATH", "/shadow/invocations"),
+        timeout_seconds=float(os.getenv(ENV_MODEL_GATEWAY_TIMEOUT_SECONDS, "10.0")),
+    )
+
     fast_api_app.state.primary_prediction_batcher = PredictionBatcher(
         client=fast_api_app.state.model_gateway_client,
         event_publisher=fast_api_app.state.prediction_event_publisher,
@@ -67,10 +80,22 @@ async def lifespan(fast_api_app: FastAPI):
         queue_timeout_seconds=(float(os.getenv("MODEL_BATCH_QUEUE_TIMEOUT_MS", "2000")) / 1000),
         response_timeout_seconds=float(os.getenv("MODEL_BATCH_RESPONSE_TIMEOUT_SECONDS", "30.0")),
     )
+    fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
+        client=fast_api_app.state.shadow_model_gateway_client,
+        event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
+        max_batch_size=int(os.getenv("MODEL_BATCH_MAX_SIZE", "16")),
+        max_wait_seconds=(float(os.getenv("MODEL_BATCH_MAX_WAIT_MS", "20")) / 1000),
+        queue_max_size=int(os.getenv("MODEL_BATCH_QUEUE_MAX_SIZE", "1024")),
+        queue_timeout_seconds=(float(os.getenv("MODEL_BATCH_QUEUE_TIMEOUT_MS", "2000")) / 1000),
+        response_timeout_seconds=float(os.getenv("MODEL_BATCH_RESPONSE_TIMEOUT_SECONDS", "30.0")),
+    )
+
     fast_api_app.state.prediction_service = PredictionService(
-        fast_api_app.state.primary_prediction_batcher
+        fast_api_app.state.primary_prediction_batcher,
+        fast_api_app.state.shadow_prediction_batcher,
     )
     fast_api_app.state.prediction_event_publisher.start()
+    fast_api_app.state.shadow_prediction_event_publisher.start()
     fast_api_app.state.prediction_service.start()
 
     try:
@@ -78,8 +103,10 @@ async def lifespan(fast_api_app: FastAPI):
     finally:
         await fast_api_app.state.prediction_service.close()
         await fast_api_app.state.prediction_event_publisher.close()
+        await fast_api_app.state.shadow_prediction_event_publisher.close()
         await asyncio.to_thread(fast_api_app.state.prediction_event_producer.close)
         await fast_api_app.state.model_gateway_client.close()
+        await fast_api_app.state.shadow_model_gateway_client.close()
         fast_api_app.state.online_snapshot_store.close()
 
 
