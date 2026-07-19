@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 
 from confluent_kafka import Producer
@@ -10,6 +11,7 @@ from secom_mlops_common.config.kafka import (
     resolve_prediction_events_topic,
 )
 
+logger = logging.getLogger(__name__)
 
 class PredictionEventProducer:
     def __init__(self) -> None:
@@ -26,42 +28,44 @@ class PredictionEventProducer:
         if not events:
             return
 
-        delivery_errors: list[str] = []
-
         def callback(error, message) -> None:
             # This should be lighten.
             # Consider warning logging level.
             if error is not None:
-                delivery_errors.append(
-                    f"topic={message.topic()} partition={message.partition()} "
-                    f"offset={message.offset()} error={error}"
+                logger.warning(
+                    "prediction_event_delivery_failed "
+                    "topic=%s partition=%s offset=%s error=%s",
+                    message.topic(),
+                    message.partition(),
+                    message.offset(),
+                    error
                 )
 
         for event in events:
             value = json.dumps(event, separators=(",", ":"), allow_nan=False).encode("utf-8")
             key = str(event["sample_id"]).encode("utf-8")
 
-            while True:
-                try:
-                    self._producer.produce(
-                        topic=self._topic,
-                        key=key,
-                        value=value,
-                        on_delivery=callback,
-                    )
-                    break
-                except BufferError:
-                    self._producer.poll(1.0)
+            try:
+                # Message will be stored in producer batch.
+                # This does not means that messages are sent to broker right now.
+                self._producer.produce(topic=self._topic, key=key, value=value, on_delivery=callback,)
+            except BufferError:
+                logger.warning(
+                    "prediction_event_local_queue_full "
+                    "sample_id=%s prediction_id=%s",
+                    event.get("sample_id"),
+                    event.get("prediction_id"),
+                )
+                self._producer.poll(0)
+                continue
 
             self._producer.poll(0)
 
-        # TODO: remove this logic.
-        remaining = self._producer.flush(self._flush_timeout_seconds)
-        if remaining > 0:
-            raise RuntimeError(f"prediction_event_flush_timeout remaining_messages={remaining}")
-        # TODO: remove this logic
-        if delivery_errors:
-            raise RuntimeError("prediction_event_delivery_failed " + "; ".join(delivery_errors))
 
     def close(self) -> None:
-        self._producer.flush(5.0)
+        remaining = self._producer.flush(self._flush_timeout_seconds)
+        if remaining > 0:
+            logger.warning(
+                "prediction_event_flush_timeout remaining_messages=%d",
+                remaining,
+            )

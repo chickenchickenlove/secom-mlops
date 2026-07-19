@@ -9,7 +9,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 - Kafka topic을 feature patch, feature state update, label event, prediction event로 분리했습니다.
 - Kafka streams app과 archiver가 raw feature 저장, feature assembly, snapshot 저장, Valkey materialization을 담당합니다.
 - `serving-api`는 Valkey에서 최신 online feature snapshot을 읽고 `model-gateway`를 통해 model runtime을 호출합니다.
-- `/predict-by-id` 예측 결과는 Kafka prediction event로 발행되고 `prediction-log-archiver`가 PostgreSQL `prediction_logs`에 저장합니다.
+- `/predict-by-id` 예측 결과는 best-effort Kafka prediction event로 발행되며, 전달된 이벤트는 `prediction-log-archiver`가 PostgreSQL `prediction_logs`에 저장합니다.
 - Airflow DAG가 candidate 학습, gate 평가, canary 배포, traffic split, release promotion, rollback을 제어합니다.
 - `build_periodic_training_dataset` DAG는 5분마다 point-in-time readiness를 확인하고, maturity만큼 이동한 Airflow data interval의 versioned training-source dataset을 영속화합니다.
 - Candidate 학습은 `serving_feature_snapshots`에서 `available_at` 기준 first-complete snapshot을 선택하고, `label_events` correction history를 cutoff 기준으로 결합합니다.
@@ -78,6 +78,9 @@ Workload scripts
 - Snapshot의 `snapshot_time`은 assembler가 계산한 event time이고, `snapshot_version`은 sample별 state 변경 순서입니다. PostgreSQL의 `available_at`은 해당 version의 Valkey 쓰기가 성공한 뒤 기록되는 online availability time입니다.
 - Operational prediction evidence는 `/predict-by-id`가 사용한 `serving_snapshot_id`, `snapshot_version`, `feature_hash`를 포함하며, serving API가 직접 DB에 쓰지 않고 Kafka event로 남깁니다.
 - `/predict`는 caller가 feature vector를 직접 전달하는 debug endpoint이므로 operational prediction evidence를 남기지 않습니다.
+- Prediction event 발행은 in-memory queue를 이용한 best-effort 방식입니다. Serving API는 Kafka delivery나 PostgreSQL 영속화를 기다리지 않고 예측 결과를 응답합니다.
+- In-memory queue 또는 Kafka Producer의 local queue가 가득 차거나, delivery가 실패하거나, 프로세스가 비정상 종료되면 이벤트가 유실될 수 있습니다. 실패한 이벤트를 재시도하거나 복구하는 durable outbox는 현재 제공하지 않습니다.
+- 정상 종료 시에는 in-memory queue drain과 Kafka Producer flush를 시도합니다.
 - Prediction event와 `prediction_logs`에는 전체 feature vector를 중복 저장하지 않습니다. Feature consumer는 `serving_snapshot_id + sample_id + snapshot_version` logical identity와 `feature_hash` 일치를 확인한 뒤 `serving_feature_snapshots.features_json`을 읽고, 작은 scalar인 `missing_count`는 prediction log에 유지합니다.
 - 현재 Shadow로 트래픽을 전송하여, Shadow로부터 오는 예측 결과를 클라이언트에게 응답하지 않고 평가에만 반영하는 것은 미구현 상태입니다. 
 
