@@ -9,7 +9,7 @@ from airflow.operators.bash import BashOperator
 
 with DAG(
         dag_id="train_candidate_from_offline_point_in_time_features",
-        description="Train and register an MLflow candidate from offline point-in-time features.",
+        description="Train and register an MLflow candidate from a READY training Dataset.",
         start_date=pendulum.datetime(2026, 1, 1, tz="Asia/Seoul"),
         schedule=None,
         catchup=False,
@@ -19,22 +19,16 @@ with DAG(
             "retries": 0,
         },
         params={
-            "cohort_start_time": Param(
-                None,
-                type=["null", "string"],
-                format="date-time",
+            "dataset_id": Param(
+                type="string",
+                minLength=1,
+                pattern=r"\S",
+                title="Training Dataset ID",
+                description=(
+                        "Required READY training dataset_builds.dataset_id. The trainer "
+                        "loads and verifies its MLflow Parquet artifact."
+                ),
             ),
-            "cutoff_time": Param(
-                None,
-                type=["null", "string"],
-                format="date-time",
-            ),
-            "label_maturity_seconds": Param(
-                120,
-                type="number",
-                minimum=0,
-            ),
-            "min_samples": Param(1000, type="integer", minimum=1),
             "min_label_coverage": Param(
                 0.95,
                 type="number",
@@ -47,8 +41,8 @@ with DAG(
         },
         tags=["ml", "candidate"],
 ) as dag:
-    train_candidate_from_offline_feature_store = BashOperator(
-        task_id="train_candidate_from_offline_feature_store",
+    train_candidate_from_training_dataset = BashOperator(
+        task_id="train_candidate_from_training_dataset",
         execution_timeout=timedelta(minutes=30),
         bash_command=r"""
 set -euo pipefail
@@ -56,12 +50,9 @@ set -euo pipefail
 cd "${ML_PROJECT_DIR:-/opt/airflow/mlops}"
 
 bash scripts/wrapper/train_candidate_from_offline_point_in_time_features.sh \
-  --cohort-start-time "{{ params.cohort_start_time }}" \
-  --cutoff-time "{{ params.cutoff_time }}" \
-  --label-maturity-seconds "{{ params.label_maturity_seconds }}" \
+  --dataset-id "{{ params.dataset_id }}" \
   --candidate-group "airflow_{{ run_id }}" \
   --training-job-id "airflow_train_{{ run_id }}" \
-  --min-samples "{{ params.min_samples }}" \
   --min-label-coverage "{{ params.min_label_coverage }}" \
   --min-fail-samples "{{ params.min_fail_samples }}" \
   --min-pass-samples "{{ params.min_pass_samples }}" \

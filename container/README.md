@@ -445,10 +445,10 @@ docker-compose up -d --build
 docker-compose ps
 ```
 
-Candidate retraining reads immutable online-serving history directly from
-`serving_feature_snapshots`. It uses each sample's first complete snapshot and
-the snapshot's Valkey-confirmed `available_at` as the training decision time.
-It does not reconstruct the training vector from `feature_events`.
+Candidate retraining receives a READY Training Dataset ID, downloads its MLflow
+Parquet artifact, and loads the complete artifact into memory. The Dataset was
+built from immutable online-serving history without reconstructing vectors from
+`feature_events`.
 
 Trigger the Airflow training DAG:
 
@@ -463,10 +463,9 @@ independent cohort:
 evaluate_candidate_serving_snapshot_gate
 ```
 
-Both DAGs use `cohort_start_time`, `cutoff_time`, and
-`label_maturity_seconds`, but their decision spines are different. Training
-uses first-complete snapshot `available_at`; the serving gate uses champion
-prediction `predicted_at`.
+The training Dataset already binds its cohort and label-maturity contract. The
+training DAG therefore accepts `dataset_id` instead of a second copy of those
+time parameters. The serving gate independently selects its decision cohort.
 
 For direct debugging from `container`, run the current trainer:
 
@@ -476,12 +475,9 @@ docker-compose run --rm \
   -e MLFLOW_TRACKING_URI=http://mlflow:5100 \
   model-trainer \
   python scripts/training/train_candidate_from_offline_point_in_time_features.py \
-    --cohort-start-time 9999999399 \
-    --cutoff-time 9999999999 \
-    --label-maturity-seconds 0 \
+    --dataset-id training_0123456789abcdef \
     --candidate-group retrain_20260701_001 \
     --training-job-id retrain_20260701_001 \
-    --min-samples 500 \
     --min-label-coverage 0.95 \
     --min-fail-samples 20 \
     --min-pass-samples 20
@@ -543,7 +539,7 @@ docker-compose up -d --no-deps --force-recreate model-server-release
 curl http://127.0.0.1:28091/metadata
 ```
 
-### Train Candidate From Serving Snapshot History
+### Train Candidate From a READY Training Dataset
 
 Run from `container`.
 
@@ -553,12 +549,9 @@ docker-compose run --rm \
   -e MLFLOW_TRACKING_URI=http://mlflow:5100 \
   model-trainer \
   python scripts/training/train_candidate_from_offline_point_in_time_features.py \
-    --cohort-start-time 9999999399 \
-    --cutoff-time 9999999999 \
-    --label-maturity-seconds 0 \
+    --dataset-id training_0123456789abcdef \
     --candidate-group retrain_20260701_001 \
     --training-job-id retrain_20260701_001 \
-    --min-samples 500 \
     --min-label-coverage 0.95 \
     --min-fail-samples 20 \
     --min-pass-samples 20
@@ -571,24 +564,15 @@ ML_CANDIDATE_GROUP
 ML_TRAINING_JOB_ID
 ```
 
-The trainer defines `S = cohort_start_time`, `T = cutoff_time`, and
-`L = label_maturity_seconds`, then derives `cohort_end_time = T - L`. It first
-selects each sample's earliest complete `serving_feature_snapshots` row across
-the full snapshot history and includes it when its `available_at` is in
-`[S, T-L]`. The stored `features_json` is the training vector; `snapshot_time`
-remains event-time metadata and is not the training cutoff.
+The trainer requires a `training`, `READY` catalog row. It downloads the exact
+MLflow artifact and verifies the manifest hash, Parquet SHA-256, schema, label
+contract, and Feature missing counts before selection. It then filters labeled
+rows in memory and deterministically selects the latest 1,000 by
+`snapshot_available_at`, `sample_id`, and `serving_snapshot_id`. Fewer than
+1,000 labeled rows fails training. All unselected rows are excluded from model
+selection and final fitting.
 
-After applying the first-complete and time filters, the trainer orders eligible
-snapshots by `available_at` descending and selects at most 1,000 rows before
-joining labels.
-
-Labels are selected from append-only `label_events`: only rows with
-`available_at <= T` are visible, and the highest `label_revision` for each
-sample wins. Labels are `LEFT JOIN`ed to the selected snapshot cohort so
-unlabeled rows remain part of the `label_coverage` denominator. Only labeled
-rows are used for model development.
-
-The main Airflow defaults require 1,000 labeled development rows. The Candidate
+Candidate training requires exactly 1,000 labeled development rows. The Candidate
 uses a stratified 80% selection-training source and 20% validation source to
 select hyperparameters and the threshold, then refits the registered model on
 the complete labeled development source. With the default full cohort, this is
@@ -605,9 +589,14 @@ The trainer registers a new `secom-fail-detector` model version, points the
 role=candidate
 candidate_group=...
 training_job_id=...
-train_source=serving_feature_snapshot_history
+train_source=versioned_training_dataset
 training_spine=serving_feature_snapshots
-training_decision_time=serving_feature_snapshots.available_at
+training_decision_time=snapshot_available_at
+training_dataset_id=...
+training_dataset_manifest_hash=...
+training_dataset_artifact_sha256=...
+training_dataset_mlflow_run_id=...
+training_dataset_selection_hash=...
 snapshot_selection=first_complete
 label_selection=available_at_lte_cutoff_then_max_revision
 cohort_start_time=...
@@ -623,17 +612,13 @@ data, prefer `scripts/training/train_candidate_from_offline_point_in_time_featur
 ### Airflow Candidate Retraining DAGs
 
 The DAG `train_candidate_from_offline_point_in_time_features` trains and
-registers a candidate from first-complete serving snapshot history and the
-label history visible at `cutoff_time`.
+registers a candidate from one explicitly selected READY Training Dataset.
 
 Trigger it manually from the Airflow UI, or with config such as:
 
 ```json
 {
-  "cohort_start_time": "2026-07-05T12:50:00+09:00",
-  "cutoff_time": "2026-07-05T13:00:00+09:00",
-  "label_maturity_seconds": 0,
-  "min_samples": 1000,
+  "dataset_id": "training_0123456789abcdef",
   "min_label_coverage": 0.95,
   "min_fail_samples": 20,
   "min_pass_samples": 20

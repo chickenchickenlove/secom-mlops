@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from psycopg.rows import dict_row
+
 from secom_mlops.datasets.training_dataset import (
     DATASET_SCHEMA_VERSION,
     DATASET_TYPE,
@@ -149,6 +151,23 @@ def ready_dataset_exists(cursor: Any, manifest_hash: str) -> bool:
         [DATASET_TYPE, manifest_hash],
     )
     return cursor.fetchone() is not None
+
+
+def get_dataset_build(dataset_id: str) -> dict[str, Any]:
+    with connect() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                SELECT *
+                FROM dataset_builds
+                WHERE dataset_id = %s;
+                """,
+                [dataset_id],
+            )
+            row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError(f"dataset catalog row not found: dataset_id={dataset_id}")
+    return dict(row)
 
 
 def claim_dataset_build(

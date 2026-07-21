@@ -10,6 +10,16 @@ from typing import Any
 import pandas as pd
 
 MLFLOW_DATASET_DIGEST_LENGTH = 36
+SHA256_V1_PREFIX = "sha256:v1:"
+
+def to_mlflow_dataset_digest(value: str) -> str:
+    if not value.startswith(SHA256_V1_PREFIX):
+        raise ValueError(
+            f"expected {SHA256_V1_PREFIX} digest: {value}"
+        )
+
+    digest = value.removeprefix(SHA256_V1_PREFIX)
+    return digest[:MLFLOW_DATASET_DIGEST_LENGTH]
 
 
 def sha256_file(path: Path) -> str:

@@ -25,7 +25,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
   - Candidate 학습 cohort와 Serving Gate cohort의 sample ID가 다르더라도 동일한 원본 SECOM 샘플이 양쪽에 포함될 수 있습니다.
 - 모델이 원본 1,567개 샘플 전체를 모두 학습하는 상황을 줄이기 위해 Champion과 Candidate의 개발 원본을 최대 1,000건으로 제한합니다.
   - Champion은 원본 SECOM 데이터의 첫 1,000건을 사용합니다.
-  - Candidate는 최신 eligible serving snapshot을 최대 1,000건 사용합니다.
+  - Candidate는 READY Training Dataset의 labeled row 중 `snapshot_available_at` 기준 최신 1,000건을 사용합니다. Labeled row가 1,000건보다 적으면 학습을 실패시킵니다.
 - Serving Gate Dataset에는 별도 상한을 두지 않고 지정한 시간 cohort의 전체 release decision을 저장합니다.
 - 이 제한만으로 학습과 Gate에서 사용되는 원본 SECOM 샘플이 완전히 분리되지는 않습니다. 이는 현재 반복 시뮬레이션 구조의 한계입니다.
 
@@ -130,7 +130,7 @@ PostgreSQL evidence tables
 ```
 
 현재 main Airflow training path는 `offline_feature_snapshots`를 source로 읽지 않습니다.
-별도 utility로 `offline_feature_snapshots`를 저장할 수는 있지만, 실제 candidate 학습 DAG는 PostgreSQL의 immutable serving snapshot과 label history에서 학습 데이터셋을 구성합니다.
+별도 utility로 `offline_feature_snapshots`를 저장할 수는 있지만, 실제 candidate 학습 DAG는 명시적인 `dataset_id`가 가리키는 READY Training Dataset artifact를 사용합니다. 이 Dataset은 PostgreSQL의 immutable serving snapshot과 label history로 미리 구성됩니다.
 
 학습 시간 계약은 다음과 같습니다.
 
@@ -174,24 +174,24 @@ label_available_at <= data_interval_end
 - Readiness 미달은 Airflow `SKIPPED`로 종료합니다. 동일 membership의 READY dataset이 이미 있는 경우에도 artifact를 재생성하지 않고 `SKIPPED`로 종료합니다.
 
 Dataset builder의 지원되는 유일 실행 경로는 Airflow DAG입니다. DAG는 `max_active_runs=1`로 dataset build를 직렬화합니다. 직접 CLI 실행, 다중 writer는 현재 지원 범위에서 제외합니다. Distributed lock이나 lease, active/stale `BUILDING` 판별은 구현하지 않았으며, 후속 Airflow 실행은 기존 non-READY catalog row를 다시 claim할 수 있습니다.
-현재 candidate trainer는 이 artifact를 아직 읽지 않고 기존 point-in-time SQL로 직접 개발 원본을 구성합니다. Dataset ID 기반 학습과 labeled row 중 최신 1,000개 선택은 후속 범위입니다.
+Candidate trainer는 `dataset_id`를 받아 READY catalog row를 확인하고 MLflow의 `dataset.parquet` 전체를 memory에 로드합니다. Manifest hash, artifact SHA-256, schema 및 row-level label/Feature 계약을 검증한 뒤 labeled row 중 `snapshot_available_at`, `sample_id`, `serving_snapshot_id` 기준 최신 1,000건을 결정적으로 선택합니다. Labeled row가 1,000건 미만이면 학습을 실패시키며, 선택되지 않은 row는 모델 선택이나 최종 refit에 사용하지 않습니다.
 
 ### Candidate와 Champion의 개발 원본
 
 Candidate는 다음 순서로 개발 원본을 구성합니다.
 
-1. Sample별 first-complete snapshot을 결정합니다.
-2. `S <= available_at <= T-L`인 snapshot 중 최신 최대 1,000건을 먼저 선택합니다.
-3. 선택된 snapshot에 label을 `LEFT JOIN`하여 실제 `label_coverage`를 계산합니다.
-4. Label이 존재하는 row만 모델 개발에 사용합니다.
+1. 명시적인 `dataset_id`로 READY Training Dataset의 Parquet 전체를 memory에 로드합니다.
+2. Labeled row만 필터링합니다.
+3. `snapshot_available_at` 기준 최신 1,000건을 선택합니다.
+4. 선택된 1,000건만 모델 선택과 최종 refit에 사용합니다.
 
-Main Airflow DAG의 기본 `min_samples=1000`이므로, 기본 실행에서는 1,000건 전체에 label이 있어야 학습이 진행됩니다. `min_samples`를 낮춘 직접 실행에서는 label coverage 조건을 만족하는 더 작은 개발 원본도 사용할 수 있습니다.
+Main Airflow 및 직접 trainer 실행 모두 Dataset에 labeled row가 최소 1,000건 있어야 진행됩니다. Dataset 전체의 label coverage와 선택된 1,000건의 fail/pass 최소 개수도 별도로 검증합니다.
 
 모델 선택과 최종 학습 절차는 다음과 같습니다.
 
 | 단계 | Candidate | Champion bootstrap |
 | --- | --- | --- |
-| 개발 원본 | 최신 eligible serving snapshot 최대 1,000건의 labeled rows | Raw SECOM 원본의 첫 1,000건 |
+| 개발 원본 | READY Training Dataset의 최신 labeled row 1,000건 | Raw SECOM 원본의 첫 1,000건 |
 | 모델 선택 | Stratified 80% 선택 학습 원본 / 20% validation 원본 | Stratified 80% 선택 학습 원본 / 20% validation 원본 |
 | 선택 대상 | Hyperparameter와 threshold | Hyperparameter와 threshold |
 | 최종 등록 모델 | 선택된 hyperparameter로 전체 labeled 개발 원본 refit | 선택된 hyperparameter로 1,000건 전체 refit |
