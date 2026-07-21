@@ -4,14 +4,14 @@ import httpx
 from typing import Any
 
 from secom_mlops.serving.api.errors import (
-    ModelGatewayError,
+    ModelRuntimeError,
 )
 
 
 logger = logging.getLogger(__name__)
 
 
-class ModelGatewayClient:
+class ModelRuntimeClient:
     def __init__(self, base_url: str, path: str, timeout_seconds: float) -> None:
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
@@ -32,25 +32,25 @@ class ModelGatewayClient:
                 json={"inputs": inputs}
             )
         except httpx.RequestError as error:
-            raise ModelGatewayError("model gateway unavailable") from error
+            raise ModelRuntimeError("model runtime unavailable") from error
 
         if response.status_code >= 400:
-            raise ModelGatewayError(
-                f"model gateway failed: status={response.status_code} body={response.text[:1000]}"
+            raise ModelRuntimeError(
+                f"model runtime failed: status={response.status_code} body={response.text[:1000]}"
             )
 
         try:
             payload = response.json()
         except ValueError as error:
-            raise ModelGatewayError("model gateway returned invalid JSON") from error
+            raise ModelRuntimeError("model runtime returned invalid JSON") from error
 
         if not isinstance(payload, dict):
-            raise ModelGatewayError("invalid model gateway response")
+            raise ModelRuntimeError("invalid model runtime response")
 
         predictions = payload.get("predictions")
         if not isinstance(predictions, list) or len(predictions) != len(inputs):
-            raise ModelGatewayError("invalid model gateway response")
+            raise ModelRuntimeError("invalid model runtime response")
         if any(not isinstance(prediction, dict) for prediction in predictions):
-            raise ModelGatewayError("model gateway prediction must be an object")
+            raise ModelRuntimeError("model runtime prediction must be an object")
 
         return predictions

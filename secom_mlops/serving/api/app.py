@@ -17,9 +17,9 @@ from secom_mlops.feature_store.online_snapshot_reader import (
 )
 from secom_mlops.monitor.prediction_events import PredictionEventProducer
 from secom_mlops.serving.api.batch import PredictionBatcher
-from secom_mlops.serving.api.client import ModelGatewayClient
+from secom_mlops.serving.api.client import ModelRuntimeClient
 from secom_mlops.serving.api.config import ServingApiConfig
-from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.errors import ModelRuntimeError
 from secom_mlops.serving.api.metrics import prediction_metrics
 from secom_mlops.serving.api.model import PredictionEventContext
 from secom_mlops.serving.api.prediction_event_publisher import (
@@ -69,12 +69,12 @@ async def lifespan(fast_api_app: FastAPI):
         timeout_seconds=config.valkey_timeout_seconds,
         key_prefix=config.valkey_key_prefix,
     )
-    fast_api_app.state.model_runtime_client = ModelGatewayClient(
+    fast_api_app.state.model_runtime_client = ModelRuntimeClient(
         base_url=config.model_runtime_url,
         path=config.model_runtime_path,
         timeout_seconds=config.model_runtime_timeout_seconds,
     )
-    fast_api_app.state.shadow_model_runtime_client = ModelGatewayClient(
+    fast_api_app.state.shadow_model_runtime_client = ModelRuntimeClient(
         base_url=config.shadow_model_runtime_url,
         path=config.shadow_model_runtime_path,
         timeout_seconds=config.model_runtime_timeout_seconds,
@@ -152,7 +152,7 @@ async def predict(payload: BatchPredictRequest, request: Request):
             normalize_prediction(raw_prediction, row_index=row_index)
             for row_index, raw_prediction in enumerate(raw_predictions)
         ]
-    except ModelGatewayError as error:
+    except ModelRuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     response_predictions = []
@@ -219,7 +219,7 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
             ),
         )
         prediction = normalize_prediction(raw_prediction, row_index=0)
-    except ModelGatewayError as error:
+    except ModelRuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     return {

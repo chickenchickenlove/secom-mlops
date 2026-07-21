@@ -4,7 +4,7 @@ from typing import Any
 from unittest.mock import patch
 
 from secom_mlops.serving.api.batch import PredictionBatcher
-from secom_mlops.serving.api.client import ModelGatewayClient
+from secom_mlops.serving.api.client import ModelRuntimeClient
 from secom_mlops.serving.api.metrics import PredictionDestination
 from secom_mlops.serving.api.model import PredictionEventContext
 from secom_mlops.serving.api.prediction_service import PredictionService
@@ -43,7 +43,7 @@ class _FakeShadowBatcher:
         return self.accepted
 
 
-class _ShadowModelGatewayClient:
+class _ShadowModelRuntimeClient:
     async def invoke_batch(
         self,
         inputs: list[list[float | None]],
@@ -155,7 +155,7 @@ class ShadowPredictionTest(unittest.TestCase):
             publisher = _CapturingPredictionEventPublisher()
             prediction_metrics = _CapturingPredictionMetrics()
             batcher = PredictionBatcher(
-                client=_ShadowModelGatewayClient(),
+                client=_ShadowModelRuntimeClient(),
                 event_publisher=publisher,
                 prediction_metrics=prediction_metrics,
                 destination="shadow",
@@ -185,7 +185,7 @@ class ShadowPredictionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_model_gateway_client_uses_shadow_invocation_path(self) -> None:
+    def test_model_runtime_client_uses_shadow_invocation_path(self) -> None:
         async def scenario() -> None:
             http_client = _CapturingHttpClient()
 
@@ -193,9 +193,9 @@ class ShadowPredictionTest(unittest.TestCase):
                 "secom_mlops.serving.api.client.httpx.AsyncClient",
                 return_value=http_client,
             ):
-                client = ModelGatewayClient(
-                    base_url="http://model-gateway:8080",
-                    path="/shadow/invocations",
+                client = ModelRuntimeClient(
+                    base_url="http://model-server-shadow:28093",
+                    path="/invocations",
                     timeout_seconds=10.0,
                 )
 
@@ -204,7 +204,7 @@ class ShadowPredictionTest(unittest.TestCase):
             finally:
                 await client.close()
 
-            self.assertEqual("/shadow/invocations", http_client.path)
+            self.assertEqual("/invocations", http_client.path)
             self.assertEqual({"inputs": [[0.0]]}, http_client.payload)
             self.assertEqual("shadow", predictions[0]["runtime_slot"])
             self.assertTrue(http_client.closed)
