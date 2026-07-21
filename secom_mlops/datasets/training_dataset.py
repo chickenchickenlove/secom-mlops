@@ -30,6 +30,28 @@ DEFAULT_MIN_PASS_SAMPLES = 20
 POSITIVE_CLASS = 1
 NEGATIVE_CLASS = -1
 
+METADATA_COLUMNS = [
+    "dataset_id",
+    "sample_id",
+    "serving_snapshot_id",
+    "snapshot_version",
+    "feature_hash",
+    "simulation_run_id",
+    "drift_segment",
+    "snapshot_time",
+    "snapshot_available_at",
+    "window_start",
+    "window_end",
+    "serving_missing_count",
+    "label_event_id",
+    "label_revision",
+    "label_measured_at",
+    "label_available_at",
+    "actual_value",
+    "actual_label",
+]
+DATASET_COLUMNS = METADATA_COLUMNS + list(MODEL_COLUMNS)
+
 
 @dataclass(frozen=True)
 class DatasetBuildConfig:
@@ -433,27 +455,7 @@ def build_dataset_frame(
         row.update(dict(zip(MODEL_COLUMNS, normalized_features)))
         rows.append(row)
 
-    metadata_columns = [
-        "dataset_id",
-        "sample_id",
-        "serving_snapshot_id",
-        "snapshot_version",
-        "feature_hash",
-        "simulation_run_id",
-        "drift_segment",
-        "snapshot_time",
-        "snapshot_available_at",
-        "window_start",
-        "window_end",
-        "serving_missing_count",
-        "label_event_id",
-        "label_revision",
-        "label_measured_at",
-        "label_available_at",
-        "actual_value",
-        "actual_label",
-    ]
-    frame = pd.DataFrame(rows, columns=metadata_columns + list(MODEL_COLUMNS))
+    frame = pd.DataFrame(rows, columns=DATASET_COLUMNS)
     if frame.empty:
         return frame
 
