@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -39,13 +41,13 @@ class ServingApiConfig(BaseSettings):
         min_length=1,
     )
 
-    model_gateway_url: str = Field(
-        default="http://127.0.0.1:8090",
-        min_length=1,
-    )
-    primary_batch_path: str = "/invocations"
-    shadow_batch_path: str = "/shadow/invocations"
-    model_gateway_timeout_seconds: float = Field(default=10.0, gt=0)
+    predictor_slot: Literal["release", "canary", "shadow"]
+
+    model_runtime_url: str = Field(min_length=1)
+    model_runtime_path: str = "/invocations"
+    shadow_model_runtime_url: str = Field(min_length=1)
+    shadow_model_runtime_path: str = "/invocations"
+    model_runtime_timeout_seconds: float = Field(default=10.0, gt=0)
 
     model_batch_max_size: int = Field(default=16, ge=1)
     model_batch_max_wait_ms: float = Field(default=20.0, ge=0)
@@ -58,7 +60,7 @@ class ServingApiConfig(BaseSettings):
     prediction_event_batch_max_wait_ms: float = Field(default=100.0, ge=0)
     predict_partial_retry_after_ms: int = Field(default=200, ge=1)
 
-    @field_validator("primary_batch_path", "shadow_batch_path")
+    @field_validator("model_runtime_path", "shadow_model_runtime_path")
     @classmethod
     def validate_invocation_path(cls, value: str) -> str:
         if not value.startswith("/"):

@@ -69,22 +69,22 @@ async def lifespan(fast_api_app: FastAPI):
         timeout_seconds=config.valkey_timeout_seconds,
         key_prefix=config.valkey_key_prefix,
     )
-    fast_api_app.state.model_gateway_client = ModelGatewayClient(
-        base_url=config.model_gateway_url,
-        path=config.primary_batch_path,
-        timeout_seconds=config.model_gateway_timeout_seconds,
+    fast_api_app.state.model_runtime_client = ModelGatewayClient(
+        base_url=config.model_runtime_url,
+        path=config.model_runtime_path,
+        timeout_seconds=config.model_runtime_timeout_seconds,
     )
-    fast_api_app.state.shadow_model_gateway_client = ModelGatewayClient(
-        base_url=config.model_gateway_url,
-        path=config.shadow_batch_path,
-        timeout_seconds=config.model_gateway_timeout_seconds,
+    fast_api_app.state.shadow_model_runtime_client = ModelGatewayClient(
+        base_url=config.shadow_model_runtime_url,
+        path=config.shadow_model_runtime_path,
+        timeout_seconds=config.model_runtime_timeout_seconds,
     )
 
     fast_api_app.state.primary_prediction_batcher = PredictionBatcher(
-        client=fast_api_app.state.model_gateway_client,
+        client=fast_api_app.state.model_runtime_client,
         event_publisher=fast_api_app.state.prediction_event_publisher,
         prediction_metrics=prediction_metrics,
-        destination="release",
+        destination=config.predictor_slot,
         max_batch_size=config.model_batch_max_size,
         max_wait_seconds=config.model_batch_max_wait_seconds,
         queue_max_size=config.model_batch_queue_max_size,
@@ -92,7 +92,7 @@ async def lifespan(fast_api_app: FastAPI):
         response_timeout_seconds=config.model_batch_response_timeout_seconds,
     )
     fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
-        client=fast_api_app.state.shadow_model_gateway_client,
+        client=fast_api_app.state.shadow_model_runtime_client,
         event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
         prediction_metrics=prediction_metrics,
         destination="shadow",
@@ -118,8 +118,8 @@ async def lifespan(fast_api_app: FastAPI):
         await fast_api_app.state.prediction_event_publisher.close()
         await fast_api_app.state.shadow_prediction_event_publisher.close()
         await asyncio.to_thread(fast_api_app.state.prediction_event_producer.close)
-        await fast_api_app.state.model_gateway_client.close()
-        await fast_api_app.state.shadow_model_gateway_client.close()
+        await fast_api_app.state.model_runtime_client.close()
+        await fast_api_app.state.shadow_model_runtime_client.close()
         fast_api_app.state.online_snapshot_store.close()
 
 
