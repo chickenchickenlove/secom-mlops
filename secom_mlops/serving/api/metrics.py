@@ -3,9 +3,10 @@ from typing import Literal
 from prometheus_client import CollectorRegistry, Counter, REGISTRY
 
 
-PredictionDestination = Literal["release", "shadow"]
+PredictionDestination = Literal["release", "canary", "shadow"]
 PREDICTION_DESTINATIONS: tuple[PredictionDestination, ...] = (
     "release",
+    "canary",
     "shadow",
 )
 
