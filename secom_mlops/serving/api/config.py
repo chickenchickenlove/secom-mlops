@@ -45,7 +45,7 @@ class ServingApiConfig(BaseSettings):
 
     model_runtime_url: str = Field(min_length=1)
     model_runtime_path: str = "/invocations"
-    shadow_model_runtime_url: str = Field(min_length=1)
+    shadow_model_runtime_url: str | None = Field(default=None, min_length=1)
     shadow_model_runtime_path: str = "/invocations"
     model_runtime_timeout_seconds: float = Field(default=10.0, gt=0)
 

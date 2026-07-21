@@ -98,6 +98,24 @@ class _CapturingHttpClient:
 
 
 class ShadowPredictionTest(unittest.TestCase):
+    def test_service_skips_fan_out_when_shadow_is_not_configured(self) -> None:
+        async def scenario() -> None:
+            primary = _FakePrimaryBatcher()
+            service = PredictionService(primary)
+            context = _event_context(prediction_id="primary-prediction")
+            features = [0.0, 1.0]
+
+            prediction = await service.predict(
+                features,
+                event_context=context,
+            )
+
+            self.assertEqual({"prediction": -1}, prediction)
+            self.assertEqual(features, primary.features)
+            self.assertIs(context, primary.event_context)
+
+        asyncio.run(scenario())
+
     def test_service_fans_out_with_distinct_prediction_ids(self) -> None:
         async def scenario() -> None:
             primary = _FakePrimaryBatcher()

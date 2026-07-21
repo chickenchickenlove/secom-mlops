@@ -55,12 +55,6 @@ async def lifespan(fast_api_app: FastAPI):
         batch_max_size=config.prediction_event_batch_max_size,
         batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
     )
-    fast_api_app.state.shadow_prediction_event_publisher = BufferedPredictionEventPublisher(
-        fast_api_app.state.prediction_event_producer,
-        queue_max_size=config.prediction_event_queue_max_size,
-        batch_max_size=config.prediction_event_batch_max_size,
-        batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
-    )
     fast_api_app.state.online_snapshot_store = OnlineFeatureSnapshotStore(
         valkey_url=config.valkey_url,
         valkey_host=config.valkey_host,
@@ -72,11 +66,6 @@ async def lifespan(fast_api_app: FastAPI):
     fast_api_app.state.model_runtime_client = ModelRuntimeClient(
         base_url=config.model_runtime_url,
         path=config.model_runtime_path,
-        timeout_seconds=config.model_runtime_timeout_seconds,
-    )
-    fast_api_app.state.shadow_model_runtime_client = ModelRuntimeClient(
-        base_url=config.shadow_model_runtime_url,
-        path=config.shadow_model_runtime_path,
         timeout_seconds=config.model_runtime_timeout_seconds,
     )
 
@@ -91,24 +80,41 @@ async def lifespan(fast_api_app: FastAPI):
         queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
         response_timeout_seconds=config.model_batch_response_timeout_seconds,
     )
-    fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
-        client=fast_api_app.state.shadow_model_runtime_client,
-        event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
-        prediction_metrics=prediction_metrics,
-        destination="shadow",
-        max_batch_size=config.model_batch_max_size,
-        max_wait_seconds=config.model_batch_max_wait_seconds,
-        queue_max_size=config.model_batch_queue_max_size,
-        queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
-        response_timeout_seconds=config.model_batch_response_timeout_seconds,
-    )
+    fast_api_app.state.shadow_prediction_event_publisher = None
+    fast_api_app.state.shadow_model_runtime_client = None
+    fast_api_app.state.shadow_prediction_batcher = None
+
+    if config.shadow_model_runtime_url is not None:
+        fast_api_app.state.shadow_prediction_event_publisher = BufferedPredictionEventPublisher(
+            fast_api_app.state.prediction_event_producer,
+            queue_max_size=config.prediction_event_queue_max_size,
+            batch_max_size=config.prediction_event_batch_max_size,
+            batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
+        )
+        fast_api_app.state.shadow_model_runtime_client = ModelRuntimeClient(
+            base_url=config.shadow_model_runtime_url,
+            path=config.shadow_model_runtime_path,
+            timeout_seconds=config.model_runtime_timeout_seconds,
+        )
+        fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
+            client=fast_api_app.state.shadow_model_runtime_client,
+            event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
+            prediction_metrics=prediction_metrics,
+            destination="shadow",
+            max_batch_size=config.model_batch_max_size,
+            max_wait_seconds=config.model_batch_max_wait_seconds,
+            queue_max_size=config.model_batch_queue_max_size,
+            queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
+            response_timeout_seconds=config.model_batch_response_timeout_seconds,
+        )
 
     fast_api_app.state.prediction_service = PredictionService(
         fast_api_app.state.primary_prediction_batcher,
         fast_api_app.state.shadow_prediction_batcher,
     )
     fast_api_app.state.prediction_event_publisher.start()
-    fast_api_app.state.shadow_prediction_event_publisher.start()
+    if fast_api_app.state.shadow_prediction_event_publisher is not None:
+        fast_api_app.state.shadow_prediction_event_publisher.start()
     fast_api_app.state.prediction_service.start()
 
     try:
@@ -116,10 +122,12 @@ async def lifespan(fast_api_app: FastAPI):
     finally:
         await fast_api_app.state.prediction_service.close()
         await fast_api_app.state.prediction_event_publisher.close()
-        await fast_api_app.state.shadow_prediction_event_publisher.close()
+        if fast_api_app.state.shadow_prediction_event_publisher is not None:
+            await fast_api_app.state.shadow_prediction_event_publisher.close()
         await asyncio.to_thread(fast_api_app.state.prediction_event_producer.close)
         await fast_api_app.state.model_runtime_client.close()
-        await fast_api_app.state.shadow_model_runtime_client.close()
+        if fast_api_app.state.shadow_model_runtime_client is not None:
+            await fast_api_app.state.shadow_model_runtime_client.close()
         fast_api_app.state.online_snapshot_store.close()
 
 

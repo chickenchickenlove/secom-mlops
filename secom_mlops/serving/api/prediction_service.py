@@ -15,25 +15,31 @@ logger = logging.getLogger(__name__)
 class PredictionService:
     def __init__(self,
                  primary_batcher: PredictionBatcher,
-                 shadow_batcher: PredictionBatcher,
+                 shadow_batcher: PredictionBatcher | None = None,
                  ) -> None:
         self._primary_batcher = primary_batcher
         self._shadow_batcher = shadow_batcher
 
     def start(self) -> None:
         self._primary_batcher.start()
-        self._shadow_batcher.start()
+        if self._shadow_batcher is not None:
+            self._shadow_batcher.start()
 
     async def close(self) -> None:
         await self._primary_batcher.close()
-        await self._shadow_batcher.close()
+        if self._shadow_batcher is not None:
+            await self._shadow_batcher.close()
 
     async def predict(self, features: list[float | None], *, event_context: PredictionEventContext) -> dict[str, Any]:
-        shadow_event_context = replace(
-            event_context,
-            prediction_id=str(uuid4())
-        )
-        self._shadow_batcher.submit_nowait(features, event_context=shadow_event_context)
+        if self._shadow_batcher is not None:
+            shadow_event_context = replace(
+                event_context,
+                prediction_id=str(uuid4())
+            )
+            self._shadow_batcher.submit_nowait(
+                features,
+                event_context=shadow_event_context,
+            )
         return await self._primary_batcher.invoke(features, event_context=event_context)
 
     async def predict_debug_many(

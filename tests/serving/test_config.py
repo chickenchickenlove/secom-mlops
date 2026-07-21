@@ -28,6 +28,17 @@ class ServingApiConfigTest(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 ServingApiConfig()
 
+    def test_allows_shadow_runtime_to_be_omitted(self) -> None:
+        environ = {
+            "PREDICTOR_SLOT": "canary",
+            "MODEL_RUNTIME_URL": "http://model-server-canary:28092",
+        }
+
+        with patch.dict(os.environ, environ, clear=True):
+            config = ServingApiConfig()
+
+        self.assertIsNone(config.shadow_model_runtime_url)
+
     def test_uses_optional_defaults(self) -> None:
         environ = {
             "PREDICTOR_SLOT": "release",
