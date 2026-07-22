@@ -8,10 +8,10 @@ from contextlib import suppress
 
 from secom_mlops.serving.api.utils import normalize_prediction, build_prediction_event
 from secom_mlops.serving.api.errors import (
-    ModelGatewayError,
+    ModelRuntimeError,
 )
 from secom_mlops.serving.api.client import (
-    ModelGatewayClient,
+    ModelRuntimeClient,
 )
 from secom_mlops.serving.api.model import (
     PredictionEventContext,
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class PredictionBatcher:
     def __init__(
         self,
-        client: ModelGatewayClient,
+        client: ModelRuntimeClient,
         event_publisher: PredictionEventPublisher,
         prediction_metrics: PredictionMetrics,
         destination: PredictionDestination,
@@ -82,7 +82,7 @@ class PredictionBatcher:
                 break
 
             if not pending.future.done():
-                pending.future.set_exception(ModelGatewayError("model batcher closed"))
+                pending.future.set_exception(ModelRuntimeError("model batcher closed"))
             self._queue.task_done()
 
     def submit_nowait(self, features: list[float | None], *, event_context: PredictionEventContext) -> bool:
@@ -163,8 +163,8 @@ class PredictionBatcher:
         except asyncio.TimeoutError as error:
             for pending in pending_items:
                 if not pending.future.done():
-                    pending.future.set_exception(ModelGatewayError("model batch queue is full"))
-            raise ModelGatewayError("model batch queue is full") from error
+                    pending.future.set_exception(ModelRuntimeError("model batch queue is full"))
+            raise ModelRuntimeError("model batch queue is full") from error
 
         try:
             return await asyncio.wait_for(
@@ -175,7 +175,7 @@ class PredictionBatcher:
             for pending in pending_items:
                 if not pending.future.done():
                     pending.future.cancel()
-            raise ModelGatewayError("model batch response timed out") from error
+            raise ModelRuntimeError("model batch response timed out") from error
 
     async def _run(self) -> None:
         while True:
@@ -203,7 +203,7 @@ class PredictionBatcher:
             except asyncio.CancelledError:
                 for pending in batch:
                     if not pending.future.done():
-                        pending.future.set_exception(ModelGatewayError("model batcher stopped"))
+                        pending.future.set_exception(ModelRuntimeError("model batcher stopped"))
                 raise
             finally:
                 for _pending in batch:
@@ -239,10 +239,10 @@ class PredictionBatcher:
                 [pending.features for pending in active]
             )
         except Exception as error:
-            gateway_error = error if isinstance(error, ModelGatewayError) else ModelGatewayError(str(error))
+            runtime_error = error if isinstance(error, ModelRuntimeError) else ModelRuntimeError(str(error))
             for pending in active:
                 if not pending.future.done():
-                    pending.future.set_exception(gateway_error)
+                    pending.future.set_exception(runtime_error)
         else:
             for pending, prediction in zip(active, predictions):
                 if pending.future.done():
@@ -250,7 +250,7 @@ class PredictionBatcher:
 
                 try:
                     normalized_prediction = normalize_prediction(prediction, row_index=0)
-                except ModelGatewayError as error:
+                except ModelRuntimeError as error:
                     pending.future.set_exception(error)
                     continue
 

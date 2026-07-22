@@ -17,9 +17,9 @@ from secom_mlops.feature_store.online_snapshot_reader import (
 )
 from secom_mlops.monitor.prediction_events import PredictionEventProducer
 from secom_mlops.serving.api.batch import PredictionBatcher
-from secom_mlops.serving.api.client import ModelGatewayClient
+from secom_mlops.serving.api.client import ModelRuntimeClient
 from secom_mlops.serving.api.config import ServingApiConfig
-from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.errors import ModelRuntimeError
 from secom_mlops.serving.api.metrics import prediction_metrics
 from secom_mlops.serving.api.model import PredictionEventContext
 from secom_mlops.serving.api.prediction_event_publisher import (
@@ -55,12 +55,6 @@ async def lifespan(fast_api_app: FastAPI):
         batch_max_size=config.prediction_event_batch_max_size,
         batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
     )
-    fast_api_app.state.shadow_prediction_event_publisher = BufferedPredictionEventPublisher(
-        fast_api_app.state.prediction_event_producer,
-        queue_max_size=config.prediction_event_queue_max_size,
-        batch_max_size=config.prediction_event_batch_max_size,
-        batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
-    )
     fast_api_app.state.online_snapshot_store = OnlineFeatureSnapshotStore(
         valkey_url=config.valkey_url,
         valkey_host=config.valkey_host,
@@ -69,46 +63,58 @@ async def lifespan(fast_api_app: FastAPI):
         timeout_seconds=config.valkey_timeout_seconds,
         key_prefix=config.valkey_key_prefix,
     )
-    fast_api_app.state.model_gateway_client = ModelGatewayClient(
-        base_url=config.model_gateway_url,
-        path=config.primary_batch_path,
-        timeout_seconds=config.model_gateway_timeout_seconds,
-    )
-    fast_api_app.state.shadow_model_gateway_client = ModelGatewayClient(
-        base_url=config.model_gateway_url,
-        path=config.shadow_batch_path,
-        timeout_seconds=config.model_gateway_timeout_seconds,
+    fast_api_app.state.model_runtime_client = ModelRuntimeClient(
+        base_url=config.model_runtime_url,
+        path=config.model_runtime_path,
+        timeout_seconds=config.model_runtime_timeout_seconds,
     )
 
     fast_api_app.state.primary_prediction_batcher = PredictionBatcher(
-        client=fast_api_app.state.model_gateway_client,
+        client=fast_api_app.state.model_runtime_client,
         event_publisher=fast_api_app.state.prediction_event_publisher,
         prediction_metrics=prediction_metrics,
-        destination="release",
+        destination=config.predictor_slot,
         max_batch_size=config.model_batch_max_size,
         max_wait_seconds=config.model_batch_max_wait_seconds,
         queue_max_size=config.model_batch_queue_max_size,
         queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
         response_timeout_seconds=config.model_batch_response_timeout_seconds,
     )
-    fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
-        client=fast_api_app.state.shadow_model_gateway_client,
-        event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
-        prediction_metrics=prediction_metrics,
-        destination="shadow",
-        max_batch_size=config.model_batch_max_size,
-        max_wait_seconds=config.model_batch_max_wait_seconds,
-        queue_max_size=config.model_batch_queue_max_size,
-        queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
-        response_timeout_seconds=config.model_batch_response_timeout_seconds,
-    )
+    fast_api_app.state.shadow_prediction_event_publisher = None
+    fast_api_app.state.shadow_model_runtime_client = None
+    fast_api_app.state.shadow_prediction_batcher = None
+
+    if config.shadow_model_runtime_url is not None:
+        fast_api_app.state.shadow_prediction_event_publisher = BufferedPredictionEventPublisher(
+            fast_api_app.state.prediction_event_producer,
+            queue_max_size=config.prediction_event_queue_max_size,
+            batch_max_size=config.prediction_event_batch_max_size,
+            batch_max_wait_seconds=config.prediction_event_batch_max_wait_seconds,
+        )
+        fast_api_app.state.shadow_model_runtime_client = ModelRuntimeClient(
+            base_url=config.shadow_model_runtime_url,
+            path=config.shadow_model_runtime_path,
+            timeout_seconds=config.model_runtime_timeout_seconds,
+        )
+        fast_api_app.state.shadow_prediction_batcher = PredictionBatcher(
+            client=fast_api_app.state.shadow_model_runtime_client,
+            event_publisher=fast_api_app.state.shadow_prediction_event_publisher,
+            prediction_metrics=prediction_metrics,
+            destination="shadow",
+            max_batch_size=config.model_batch_max_size,
+            max_wait_seconds=config.model_batch_max_wait_seconds,
+            queue_max_size=config.model_batch_queue_max_size,
+            queue_timeout_seconds=config.model_batch_queue_timeout_seconds,
+            response_timeout_seconds=config.model_batch_response_timeout_seconds,
+        )
 
     fast_api_app.state.prediction_service = PredictionService(
         fast_api_app.state.primary_prediction_batcher,
         fast_api_app.state.shadow_prediction_batcher,
     )
     fast_api_app.state.prediction_event_publisher.start()
-    fast_api_app.state.shadow_prediction_event_publisher.start()
+    if fast_api_app.state.shadow_prediction_event_publisher is not None:
+        fast_api_app.state.shadow_prediction_event_publisher.start()
     fast_api_app.state.prediction_service.start()
 
     try:
@@ -116,10 +122,12 @@ async def lifespan(fast_api_app: FastAPI):
     finally:
         await fast_api_app.state.prediction_service.close()
         await fast_api_app.state.prediction_event_publisher.close()
-        await fast_api_app.state.shadow_prediction_event_publisher.close()
+        if fast_api_app.state.shadow_prediction_event_publisher is not None:
+            await fast_api_app.state.shadow_prediction_event_publisher.close()
         await asyncio.to_thread(fast_api_app.state.prediction_event_producer.close)
-        await fast_api_app.state.model_gateway_client.close()
-        await fast_api_app.state.shadow_model_gateway_client.close()
+        await fast_api_app.state.model_runtime_client.close()
+        if fast_api_app.state.shadow_model_runtime_client is not None:
+            await fast_api_app.state.shadow_model_runtime_client.close()
         fast_api_app.state.online_snapshot_store.close()
 
 
@@ -152,7 +160,7 @@ async def predict(payload: BatchPredictRequest, request: Request):
             normalize_prediction(raw_prediction, row_index=row_index)
             for row_index, raw_prediction in enumerate(raw_predictions)
         ]
-    except ModelGatewayError as error:
+    except ModelRuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     response_predictions = []
@@ -219,7 +227,7 @@ async def predict_by_id(payload: PredictByIdRequest, request: Request):
             ),
         )
         prediction = normalize_prediction(raw_prediction, row_index=0)
-    except ModelGatewayError as error:
+    except ModelRuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     return {

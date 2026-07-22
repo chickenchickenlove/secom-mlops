@@ -1,2 +1,2 @@
-class ModelGatewayError(Exception):
+class ModelRuntimeError(Exception):
     pass

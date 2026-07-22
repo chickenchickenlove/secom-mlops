@@ -440,28 +440,7 @@
         retries: 20
       restart: unless-stopped
 
-    model-gateway:
-      build:
-        context: .
-        dockerfile: dockerfiles/nginx.Dockerfile
-      depends_on:
-        model-server-release:
-          condition: service_healthy
-        model-server-canary:
-          condition: service_healthy
-        model-server-shadow:
-          condition: service_healthy
-      ports:
-        - "8090:8080"
-        - "18080:18080"
-      healthcheck:
-        test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
-        interval: 5s
-        retries: 20
-      restart: unless-stopped
-
-
-    serving-api:
+    predictor-release:
       build:
         context: ..
         dockerfile: container/dockerfiles/python-app.Dockerfile
@@ -472,12 +451,14 @@
           condition: service_completed_successfully
         valkey:
           condition: service_healthy
-        model-gateway:
+        model-server-release:
+          condition: service_healthy
+        model-server-shadow:
           condition: service_healthy
       environment:
         KAFKA_BOOTSTRAP_SERVERS: kafka:29092
         PREDICTION_EVENTS_TOPIC: secom-prediction-events
-        PREDICTION_EVENT_CLIENT_ID: serving-api-prediction-event-producer
+        PREDICTION_EVENT_CLIENT_ID: predictor-release-prediction-event-producer
         PREDICTION_EVENT_FLUSH_TIMEOUT_SECONDS: "10"
         VALKEY_URL: valkey://valkey:6379/0
         VALKEY_HOST: valkey
@@ -485,10 +466,12 @@
         VALKEY_DATABASE: "0"
         VALKEY_TIMEOUT_SECONDS: "2"
         VALKEY_KEY_PREFIX: online_feature_snapshot
-        MODEL_GATEWAY_URL: http://model-gateway:8080
-        PRIMARY_BATCH_PATH: /invocations
-        SHADOW_BATCH_PATH: /shadow/invocations
-        MODEL_GATEWAY_TIMEOUT_SECONDS: "10"
+        PREDICTOR_SLOT: release
+        MODEL_RUNTIME_URL: http://model-server-release:28091
+        MODEL_RUNTIME_PATH: /invocations
+        SHADOW_MODEL_RUNTIME_URL: http://model-server-shadow:28093
+        SHADOW_MODEL_RUNTIME_PATH: /invocations
+        MODEL_RUNTIME_TIMEOUT_SECONDS: "10"
         MODEL_BATCH_MAX_SIZE: "16"
         MODEL_BATCH_MAX_WAIT_MS: "20"
         MODEL_BATCH_QUEUE_TIMEOUT_MS: "2000"
@@ -505,12 +488,85 @@
         - 0.0.0.0
         - --port
         - "8080"
-      ports:
-        - "8080:8080"
       healthcheck:
         test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)\""]
         interval: 5s
         timeout: 3s
+        retries: 20
+      restart: unless-stopped
+
+    predictor-canary:
+      build:
+        context: ..
+        dockerfile: container/dockerfiles/python-app.Dockerfile
+      depends_on:
+        kafka:
+          condition: service_healthy
+        kafka-init:
+          condition: service_completed_successfully
+        valkey:
+          condition: service_healthy
+        model-server-canary:
+          condition: service_healthy
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        PREDICTION_EVENTS_TOPIC: secom-prediction-events
+        PREDICTION_EVENT_CLIENT_ID: predictor-canary-prediction-event-producer
+        PREDICTION_EVENT_FLUSH_TIMEOUT_SECONDS: "10"
+        VALKEY_URL: valkey://valkey:6379/0
+        VALKEY_HOST: valkey
+        VALKEY_PORT: "6379"
+        VALKEY_DATABASE: "0"
+        VALKEY_TIMEOUT_SECONDS: "2"
+        VALKEY_KEY_PREFIX: online_feature_snapshot
+        PREDICTOR_SLOT: canary
+        MODEL_RUNTIME_URL: http://model-server-canary:28092
+        MODEL_RUNTIME_PATH: /invocations
+        MODEL_RUNTIME_TIMEOUT_SECONDS: "10"
+        MODEL_BATCH_MAX_SIZE: "16"
+        MODEL_BATCH_MAX_WAIT_MS: "20"
+        MODEL_BATCH_QUEUE_TIMEOUT_MS: "2000"
+        MODEL_BATCH_RESPONSE_TIMEOUT_SECONDS: "30"
+        MODEL_BATCH_QUEUE_MAX_SIZE: "1024"
+        PREDICTION_EVENT_QUEUE_MAX_SIZE: "4096"
+        PREDICTION_EVENT_BATCH_MAX_SIZE: "100"
+        PREDICTION_EVENT_BATCH_MAX_WAIT_MS: "100"
+        PREDICT_PARTIAL_RETRY_AFTER_MS: "200"
+      command:
+        - uvicorn
+        - secom_mlops.serving.api.app:app
+        - --host
+        - 0.0.0.0
+        - --port
+        - "8080"
+      healthcheck:
+        test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)\""]
+        interval: 5s
+        timeout: 3s
+        retries: 20
+      restart: unless-stopped
+
+    model-gateway:
+      build:
+        context: .
+        dockerfile: dockerfiles/nginx.Dockerfile
+      depends_on:
+        predictor-release:
+          condition: service_healthy
+        predictor-canary:
+          condition: service_healthy
+        model-server-release:
+          condition: service_healthy
+        model-server-canary:
+          condition: service_healthy
+        model-server-shadow:
+          condition: service_healthy
+      ports:
+        - "8080:8080"
+        - "18080:18080"
+      healthcheck:
+        test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
+        interval: 5s
         retries: 20
       restart: unless-stopped
 

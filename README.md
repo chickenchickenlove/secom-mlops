@@ -8,13 +8,14 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 
 - Kafka topic을 feature patch, feature state update, label event, prediction event로 분리했습니다.
 - Kafka streams app과 archiver가 raw feature 저장, feature assembly, snapshot 저장, Valkey materialization을 담당합니다.
-- `serving-api`는 Valkey에서 최신 online feature snapshot을 읽고 `model-gateway`를 통해 model runtime을 호출합니다.
+- `model-gateway`는 online prediction 요청을 release/canary Predictor로 분배합니다. 각 Predictor는 Valkey에서 최신 online feature snapshot을 읽고 자신에게 연결된 model runtime을 직접 호출합니다.
+- Release Predictor는 operational prediction을 Shadow runtime으로도 best-effort fan-out하며, Canary Predictor는 Shadow runtime을 호출하지 않습니다.
 - `/predict-by-id` 예측 결과는 best-effort Kafka prediction event로 발행되며, 전달된 이벤트는 `prediction-log-archiver`가 PostgreSQL `prediction_logs`에 저장합니다.
 - Airflow DAG가 candidate 학습, gate 평가, canary 배포, traffic split, release promotion, rollback을 제어합니다.
 - `build_periodic_training_dataset` DAG는 5분마다 point-in-time readiness를 확인하고, maturity만큼 이동한 Airflow data interval의 versioned training-source dataset을 영속화합니다.
 - Candidate 학습은 `serving_feature_snapshots`에서 `available_at` 기준 first-complete snapshot을 선택하고, `label_events` correction history를 cutoff 기준으로 결합합니다.
 - Candidate Gate는 release prediction decision으로 평가 Dataset을 먼저 영속화하고, 그 dataset을 다시 불러와 Candidate와 Champion을 비교합니다.
-- Grafana는 PostgreSQL metric table과 Prometheus의 Kafka 및 Serving dispatch metric을 함께 시각화합니다.
+- Grafana는 PostgreSQL metric table과 Prometheus의 Kafka 및 Predictor dispatch metric을 함께 시각화합니다.
 - Grafana에서 오프라인 학습 데이터와 serving gate를 위한 데이터셋 구축에 필요한 Label Maturity를 10분 단위로 확인할 수 있습니다.
 
 ## 현재 범위
@@ -60,7 +61,7 @@ Kafka 기반 이벤트 파이프라인, Valkey online feature store, FastAPI ser
 ## Online Serving Path
 ![online-serving-path](docs/images/online-serving-path.png)
 
-Feature online path는 Kafka event를 기준으로 구성됩니다.
+Feature materialization path는 Kafka event를 기준으로 구성됩니다.
 
 ```text
 Workload scripts
@@ -70,23 +71,36 @@ Workload scripts
 -> feature-materializer
    -> Valkey online_feature_snapshot:{sample_id}
    -> PostgreSQL serving_feature_snapshots
--> serving-api /predict-by-id
--> model-gateway
--> model-server-release / canary 
 ```
+
+Online prediction path는 Nginx `model-gateway`가 release/canary Predictor를 선택한 뒤, 선택된 Predictor가 feature 조회와 model invocation을 담당합니다.
+
+```text
+Prediction client
+-> model-gateway /predict-by-id
+   -> predictor-release
+      -> Valkey online_feature_snapshot:{sample_id}
+      -> model-server-release
+      -> model-server-shadow (best effort)
+   or
+   -> predictor-canary
+      -> Valkey online_feature_snapshot:{sample_id}
+      -> model-server-canary
+```
+
 - `feature-materializer`는 Valkey `SET` 성공 후 동일한 snapshot을 PostgreSQL에 저장하고, 두 저장이 모두 끝난 뒤 Kafka offset을 commit합니다.
 - Snapshot의 `snapshot_time`은 assembler가 계산한 event time이고, `snapshot_version`은 sample별 state 변경 순서입니다. PostgreSQL의 `available_at`은 해당 version의 Valkey 쓰기가 성공한 뒤 기록되는 online availability time입니다.
-- Operational prediction evidence는 `/predict-by-id`가 사용한 `serving_snapshot_id`, `snapshot_version`, `feature_hash`를 포함하며, serving API가 직접 DB에 쓰지 않고 Kafka event로 남깁니다.
+- Operational prediction evidence는 `/predict-by-id`가 사용한 `serving_snapshot_id`, `snapshot_version`, `feature_hash`를 포함하며, Predictor가 직접 DB에 쓰지 않고 Kafka event로 남깁니다.
 - `/predict`는 caller가 feature vector를 직접 전달하는 debug endpoint이므로 operational prediction evidence를 남기지 않습니다.
-- Prediction event 발행은 in-memory queue를 이용한 best-effort 방식입니다. Serving API는 Kafka delivery나 PostgreSQL 영속화를 기다리지 않고 예측 결과를 응답합니다.
+- Prediction event 발행은 in-memory queue를 이용한 best-effort 방식입니다. Predictor는 Kafka delivery나 PostgreSQL 영속화를 기다리지 않고 예측 결과를 응답합니다.
 - In-memory queue 또는 Kafka Producer의 local queue가 가득 차거나, delivery가 실패하거나, 프로세스가 비정상 종료되면 이벤트가 유실될 수 있습니다. 실패한 이벤트를 재시도하거나 복구하는 durable outbox는 현재 제공하지 않습니다.
 - 정상 종료 시에는 in-memory queue drain과 Kafka Producer flush를 시도합니다.
 - Prediction event와 `prediction_logs`에는 전체 feature vector를 중복 저장하지 않습니다. Feature consumer는 `serving_snapshot_id + sample_id + snapshot_version` logical identity와 `feature_hash` 일치를 확인한 뒤 `serving_feature_snapshots.features_json`을 읽고, 작은 scalar인 `missing_count`는 prediction log에 유지합니다.
-- `/predict-by-id` 요청은 Primary와 Shadow runtime으로 fan-out됩니다. 클라이언트는 Primary 결과만 응답받으며, Shadow 결과는 best-effort prediction event로 발행됩니다. Primary와 Shadow를 비교하는 평가 및 메트릭 계산은 후속 범위입니다.
+- Release Predictor의 `/predict-by-id` 요청은 Release와 Shadow runtime으로 fan-out됩니다. 클라이언트는 Release 결과만 응답받으며, Shadow 결과는 best-effort prediction event로 발행됩니다. Canary Predictor에는 Shadow runtime 설정을 주입하지 않으므로 Canary 요청은 Canary runtime만 호출합니다. Release와 Shadow를 비교하는 평가 및 메트릭 계산은 후속 범위입니다.
 
 
 ```text
-serving-api /predict-by-id
+predictor-release / predictor-canary /predict-by-id
 -> secom-prediction-events
 -> prediction-log-archiver
 -> PostgreSQL prediction_logs
@@ -114,7 +128,7 @@ Airflow
 -> MLflow candidate 등록
 -> candidate gate 평가
 -> canary slot 배포
--> model-gateway canary traffic 조정
+-> model-gateway release/canary Predictor traffic 조정
 -> release promotion 또는 rollback
 ```
 
@@ -300,7 +314,7 @@ S = E-W
 - `(model_run_id, threshold)`별로 evaluation wide row 하나를 append합니다. Cohort/count/status/confusion은 항상 기록하고 scalar quality metric은 `evaluation_status='ok'`일 때만 기록합니다.
 - `model_metrics`는 offline evaluation 결과용으로 유지되며, 해당 reader의 `label_events` 전환은 후속 작업입니다.
 - `evaluate_drift_metrics.py`, `create_drift_reference_baseline.py`, `evaluate_fixed_reference_drift_metrics.py`는 logical identity와 `feature_hash`를 함께 확인해 serving snapshot의 feature vector를 읽습니다. `prediction_logs`는 feature vector 대신 실제 inference에 사용한 snapshot reference와 hash를 보관합니다.
-- Kafka 운영 지표와 Serving API의 Release/Shadow prediction dispatch 지표는 Prometheus를 거쳐 Grafana로 들어갑니다.
+- Kafka 운영 지표와 Predictor의 Release/Canary/Shadow prediction dispatch 지표는 Prometheus를 거쳐 Grafana로 들어갑니다.
 
 ## Runtime Services
 
@@ -313,8 +327,7 @@ S = E-W
 | Valkey | online feature store | `6379` |
 | MLflow | tracking server / registry | `5100` |
 | Airflow webserver | control plane UI | `8081` |
-| serving-api | online prediction API | `8080` |
-| model-gateway | model runtime gateway | `8090` |
+| model-gateway | online prediction gateway | `8080` |
 | model-gateway admin | traffic/reload admin API | `18080` |
 | model-server-release | release runtime | `28091` |
 | model-server-canary | canary runtime | `28092` |
@@ -379,9 +392,9 @@ label_events
 - Feature는 `S <= available_at <= T-L`인 first-complete snapshot을 사용하고, label은 `available_at <= T`인 revision 중 가장 높은 revision을 사용합니다.
 
 ### Gateway 기반 release control
-Airflow는 model runtime을 직접 조작하지 않고 `model-gateway` admin API를 호출합니다. 
-Gateway는 release, canary, shadow runtime으로 traffic을 분리하고 reload를 제어합니다.
-Serving API는 `/predict-by-id` 요청을 Shadow runtime으로 고정 fan-out하지만, Shadow 평가와 이를 이용한 배포 제어는 아직 구현하지 않았습니다. 비율 기반 traffic 조절은 현재 release와 canary 사이에서만 수행합니다.
+Airflow는 model runtime을 직접 조작하지 않고 `model-gateway`가 제공하는 runtime metadata/reload proxy 경로를 호출합니다. Traffic policy와 Nginx reload는 별도 admin API(`:18080`)가 담당합니다.
+Gateway는 online prediction traffic을 release/canary Predictor 사이에서 분배합니다. 선택된 Predictor는 자신의 primary runtime을 직접 호출하며, Release Predictor만 `/predict-by-id` 요청을 Shadow runtime으로 best-effort fan-out합니다.
+Release, canary, shadow Runtime의 health, metadata, reload 관리 경로는 Gateway에 유지하지만 Shadow invocation 경로는 외부에 노출하지 않습니다. Shadow 평가와 이를 이용한 배포 제어는 아직 구현하지 않았습니다.
 
 ### Monitoring feedback
 Prediction/label evidence에서 T/L/W 기반 live model quality와 prediction-window metric을 계산하고, snapshot evidence에서는 drift metric을 계산합니다. Live quality는 `live_model_quality_evaluations` wide row로 append되며 Grafana는 status/coverage와 metric을 함께 표시합니다.

@@ -13,8 +13,14 @@ scrape_configs:
       - targets:
           - kafka-exporter:9308
 
-  - job_name: serving-api
+  - job_name: predictor
     metrics_path: /metrics
     static_configs:
       - targets:
-          - serving-api:8080
+          - predictor-release:8080
+        labels:
+          predictor_slot: release
+      - targets:
+          - predictor-canary:8080
+        labels:
+          predictor_slot: canary

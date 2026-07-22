@@ -1,21 +1,21 @@
 from typing import Any
 
-from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.errors import ModelRuntimeError
 from secom_mlops.serving.api.model import PredictionEventContext
 
 
 def normalize_prediction(raw: Any, row_index: int) -> dict[str, Any]:
     if not isinstance(raw, dict):
-        raise ModelGatewayError("model gateway prediction must be an object.")
+        raise ModelRuntimeError("model runtime prediction must be an object.")
 
     try:
         model_run_id = raw.get("model_run_id")
         threshold = raw.get("threshold")
 
         if not model_run_id:
-            raise ModelGatewayError("model gateway response missing model_run_id")
+            raise ModelRuntimeError("model runtime response missing model_run_id")
         if threshold is None:
-            raise ModelGatewayError("model gateway response missing threshold")
+            raise ModelRuntimeError("model runtime response missing threshold")
 
         return {
             "row_index": row_index,
@@ -31,7 +31,7 @@ def normalize_prediction(raw: Any, row_index: int) -> dict[str, Any]:
             "runtime_slot": raw.get("runtime_slot"),
         }
     except (KeyError, TypeError, ValueError) as error:
-        raise ModelGatewayError(f"invalid model gateway prediction: {error}") from error
+        raise ModelRuntimeError(f"invalid model runtime prediction: {error}") from error
 
 
 def build_snapshot_prediction_event(

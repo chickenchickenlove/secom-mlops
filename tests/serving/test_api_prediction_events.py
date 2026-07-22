@@ -7,7 +7,7 @@ from secom_mlops.serving.api.app import (
     predict,
     predict_by_id,
 )
-from secom_mlops.serving.api.errors import ModelGatewayError
+from secom_mlops.serving.api.errors import ModelRuntimeError
 from secom_mlops.serving.api.metrics import PredictionDestination
 from secom_mlops.serving.api.model import PredictionEventContext
 from secom_mlops.serving.api.batch import PredictionBatcher
@@ -46,7 +46,7 @@ class _FakePredictionService:
         return [_model_prediction() for _ in inputs]
 
 
-class _FakeModelGatewayClient:
+class _FakeModelRuntimeClient:
     def __init__(self) -> None:
         self.inputs: list[list[list[float | None]]] = []
 
@@ -58,7 +58,7 @@ class _FakeModelGatewayClient:
         return [_model_prediction() for _ in inputs]
 
 
-class _MalformedThenValidModelGatewayClient:
+class _MalformedThenValidModelRuntimeClient:
     def __init__(self) -> None:
         self.calls = 0
 
@@ -143,7 +143,7 @@ class ServingPredictionEventTest(unittest.TestCase):
 
     def test_prediction_batcher_submits_event_after_inference(self) -> None:
         async def scenario() -> None:
-            client = _FakeModelGatewayClient()
+            client = _FakeModelRuntimeClient()
             publisher = _CapturingPredictionEventPublisher()
             prediction_metrics = _CapturingPredictionMetrics()
             batcher = _prediction_batcher(
@@ -188,7 +188,7 @@ class ServingPredictionEventTest(unittest.TestCase):
     def test_prediction_batcher_invoke_many_does_not_submit_events(self) -> None:
         async def scenario() -> None:
             publisher = _CapturingPredictionEventPublisher()
-            batcher = _prediction_batcher(_FakeModelGatewayClient(), publisher)
+            batcher = _prediction_batcher(_FakeModelRuntimeClient(), publisher)
             batcher.start()
 
             try:
@@ -208,7 +208,7 @@ class ServingPredictionEventTest(unittest.TestCase):
         async def scenario() -> None:
             prediction_metrics = _CapturingPredictionMetrics()
             batcher = _prediction_batcher(
-                _FakeModelGatewayClient(),
+                _FakeModelRuntimeClient(),
                 _CapturingPredictionEventPublisher(),
                 prediction_metrics=prediction_metrics,
             )
@@ -228,7 +228,7 @@ class ServingPredictionEventTest(unittest.TestCase):
 
     def test_prediction_batcher_survives_metric_record_failure(self) -> None:
         async def scenario() -> None:
-            client = _FakeModelGatewayClient()
+            client = _FakeModelRuntimeClient()
             batcher = _prediction_batcher(
                 client,
                 _CapturingPredictionEventPublisher(),
@@ -269,15 +269,15 @@ class ServingPredictionEventTest(unittest.TestCase):
 
     def test_prediction_batcher_survives_malformed_prediction(self) -> None:
         async def scenario() -> None:
-            client = _MalformedThenValidModelGatewayClient()
+            client = _MalformedThenValidModelRuntimeClient()
             publisher = _CapturingPredictionEventPublisher()
             batcher = _prediction_batcher(client, publisher)
             batcher.start()
 
             try:
                 with self.assertRaisesRegex(
-                    ModelGatewayError,
-                    "model gateway prediction must be an object",
+                    ModelRuntimeError,
+                    "model runtime prediction must be an object",
                 ):
                     await batcher.invoke_many([[0.0] * NUM_FEATURES])
 
@@ -293,7 +293,7 @@ class ServingPredictionEventTest(unittest.TestCase):
     def test_prediction_batcher_does_not_fail_when_event_is_rejected(self) -> None:
         async def scenario() -> None:
             publisher = _CapturingPredictionEventPublisher(accepted=False)
-            batcher = _prediction_batcher(_FakeModelGatewayClient(), publisher)
+            batcher = _prediction_batcher(_FakeModelRuntimeClient(), publisher)
             context = PredictionEventContext(
                 prediction_id="prediction-001",
                 request_id="request-001",
@@ -321,7 +321,7 @@ class ServingPredictionEventTest(unittest.TestCase):
     def test_prediction_batcher_does_not_fail_when_publisher_raises(self) -> None:
         async def scenario() -> None:
             batcher = _prediction_batcher(
-                _FakeModelGatewayClient(),
+                _FakeModelRuntimeClient(),
                 _FailingPredictionEventPublisher(),
             )
             context = PredictionEventContext(
