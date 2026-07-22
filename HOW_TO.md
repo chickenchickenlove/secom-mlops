@@ -61,8 +61,8 @@ $ ./scripts/scenarios/scenario2.sh
   - Grafana: http://localhost:3000
   - Airflow: http://localhost:8081
   - MLflow: http://localhost:5100
-  - serving-api health: http://localhost:8080/health
-  - model-gateway health: http://localhost:8090/health
+  - prediction gateway health: http://localhost:8080/health
+  - prediction gateway admin health: http://localhost:18080/health
 
 ### 5. Train a candidate model
 - 라벨이 충분히 공급된 이후 작업이 필요합니다. `runtime/online_workload_next_feature_*_state.json`, `runtime/online_workload_next_label_state.json`의 index가 1000 이상인 경우 시도해주세요.  

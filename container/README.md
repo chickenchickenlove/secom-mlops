@@ -6,7 +6,7 @@ This stack runs the local SECOM/FDC online path, offline/raw store sync, model s
 
 - PostgreSQL stores `feature_events`, `serving_feature_snapshots`, append-only `label_events`, `prediction_logs`, offline data, and monitoring metrics.
 - Kafka carries feature patch, feature state update, label event, and prediction event topics.
-- Prometheus scrapes Kafka metrics and Serving API prediction dispatch metrics.
+- Prometheus scrapes Kafka metrics and release/canary Predictor dispatch metrics.
 - Valkey stores the latest online feature snapshot per `sample_id`.
 - MLflow stores experiments, model registry metadata, and model artifacts.
 - Grafana reads PostgreSQL through the provisioned `Monitoring Postgres` datasource and operational metrics through the `Prometheus` datasource.
@@ -16,16 +16,25 @@ This stack runs the local SECOM/FDC online path, offline/raw store sync, model s
 ## Runtime Flow
 
 ```text
-Feature online path:
+Feature materialization path:
 secom-feature-patches
 -> feature-assembler
 -> secom-feature-state-updates
 -> feature-materializer
    -> Valkey online_feature_snapshot:{sample_id}
    -> PostgreSQL serving_feature_snapshots
--> serving-api /predict-by-id
--> model-gateway
--> model-server-release
+
+Online prediction path:
+Prediction client
+-> model-gateway /predict-by-id
+   -> predictor-release
+      -> Valkey online_feature_snapshot:{sample_id}
+      -> model-server-release
+      -> model-server-shadow (best effort)
+   or
+   -> predictor-canary
+      -> Valkey online_feature_snapshot:{sample_id}
+      -> model-server-canary
 -> secom-prediction-events
 -> prediction-log-archiver
 -> prediction_logs
@@ -41,7 +50,7 @@ secom-label-events
 -> PostgreSQL append-only label_events
 
 Prediction evidence store:
-serving-api /predict-by-id
+predictor-release / predictor-canary /predict-by-id
 -> secom-prediction-events
 -> prediction-log-archiver
 -> PostgreSQL prediction_logs
@@ -145,16 +154,16 @@ max by (consumergroup, topic) (kafka_consumergroup_lag)
 sum by (consumergroup) (kafka_consumergroup_lag)
 ```
 
-The Serving API exposes Prometheus metrics at `/metrics`. The dispatch counter
+Each Predictor exposes Prometheus metrics at `/metrics`. The dispatch counter
 is increased by the number of operational `/predict-by-id` rows immediately
-before each model gateway call. Debug `/predict` traffic is excluded.
-`destination="release"` represents the primary `/invocations` route and
-therefore includes traffic that the gateway may route to Canary.
-`destination="shadow"` represents `/shadow/invocations`.
+before each model runtime call. Debug `/predict` traffic is excluded.
+`destination="release"` and `destination="canary"` represent calls from each
+Predictor to its paired primary Runtime. `destination="shadow"` represents the
+Release Predictor's best-effort calls to the Shadow Runtime.
 
 ```promql
 sum by (destination) (
-  rate(secom_serving_prediction_dispatch_total{destination=~"release|shadow"}[1m])
+  rate(secom_serving_prediction_dispatch_total{destination=~"release|canary|shadow"}[1m])
 )
 ```
 
@@ -171,8 +180,11 @@ grafana
 mlflow
 model-trainer
 model-server-release
+model-server-canary
+model-server-shadow
+predictor-release
+predictor-canary
 model-gateway
-serving-api
 metrics-evaluator
 drift-metrics-evaluator
 ```

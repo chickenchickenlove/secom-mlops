@@ -204,7 +204,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (destination) (\n  rate(secom_serving_prediction_dispatch_total{destination=~\"release|shadow\"}[$__rate_interval])\n)",
+          "expr": "sum by (destination) (\n  rate(secom_serving_prediction_dispatch_total{destination=~\"release|canary|shadow\"}[$__rate_interval])\n)",
           "instant": false,
           "legendFormat": "{{destination}}",
           "range": true,
